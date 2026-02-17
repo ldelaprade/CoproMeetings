@@ -4,10 +4,6 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  define: {
-    // Vite remplacera 'process.env.API_KEY' dans votre code par la valeur ci-dessous.
-    'process.env.API_KEY': JSON.stringify('VOTRE_CLE_API_ICI')
-  },
   server: {
     port: 3000,
     open: true,

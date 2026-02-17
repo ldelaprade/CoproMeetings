@@ -18,23 +18,24 @@ import {
   saveResolution,
   getAllResolutions,
   updateResStatus,
-  registerVote
+  registerVote,
+  openLocalDatabaseFile,
+  createLocalDatabaseFile
 } from './services/dbService';
 
 const App: React.FC = () => {
   const [dbReady, setDbReady] = useState(false);
+  const [dbMode, setDbMode] = useState<'local' | 'browser' | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
+  
   const [role, setRole] = useState<RoleType | null>(null);
   const [currentUser, setCurrentUser] = useState<UserLogin | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   
-  // Condominium Navigation
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
   const [selectedCondo, setSelectedCondo] = useState<Condominium | null>(null);
-  
-  // Meeting Navigation
   const [meetings, setMeetings] = useState<GeneralMeeting[]>([]);
   const [activeMeeting, setActiveMeeting] = useState<GeneralMeeting | null>(null);
-
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [resolutions, setResolutions] = useState<Resolution[]>([]);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
@@ -49,14 +50,12 @@ const App: React.FC = () => {
   const refreshCondoData = useCallback((condoId: number) => {
     const condo = getCondominium(condoId);
     setSelectedCondo(condo as any);
-    
     const voters = getVoters(condoId);
     setParticipants(voters.map((v: any) => ({
       id: v.id.toString(),
       name: v.name,
       email: v.email
     })));
-
     const condoMeetings = getMeetings(condoId);
     setMeetings(condoMeetings as any);
   }, []);
@@ -66,17 +65,35 @@ const App: React.FC = () => {
     setResolutions(resFromDb as any);
   }, []);
 
-  useEffect(() => {
-    initDatabase().then(() => {
+  const startWithBrowserStorage = async () => {
+    await initDatabase();
+    setDbMode('browser');
+    setDbReady(true);
+  };
+
+  const startWithLocalFile = async () => {
+    const result = await openLocalDatabaseFile();
+    if (result) {
+      setFileName(result.name);
+      setDbMode('local');
       setDbReady(true);
-    });
-  }, []);
+    }
+  };
+
+  const startWithNewFile = async () => {
+    const result = await createLocalDatabaseFile();
+    if (result) {
+      setFileName(result.name);
+      setDbMode('local');
+      setDbReady(true);
+    }
+  };
 
   useEffect(() => {
-    if (role === 'MANAGER') {
+    if (dbReady && role === 'MANAGER') {
       loadInitialData();
     }
-  }, [role, loadInitialData]);
+  }, [dbReady, role, loadInitialData]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,16 +134,24 @@ const App: React.FC = () => {
     setLoginError(null);
   };
 
-  const handleCreateCondo = (name: string, address: string) => {
-    createCondominium(name, address);
-    loadInitialData();
-  };
-
+  // Adding handlers for LeaderBoard and VoterBoard
   const handleSelectCondo = (condo: Condominium | null) => {
     setSelectedCondo(condo);
     setActiveMeeting(null);
     if (condo) {
       refreshCondoData(condo.id);
+    }
+  };
+
+  const handleCreateCondo = (name: string, address: string) => {
+    createCondominium(name, address);
+    loadInitialData();
+  };
+
+  const handleSelectMeeting = (meeting: GeneralMeeting | null) => {
+    setActiveMeeting(meeting);
+    if (meeting) {
+      refreshMeetingData(meeting.id);
     }
   };
 
@@ -137,16 +162,9 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSelectMeeting = (meeting: GeneralMeeting | null) => {
-    setActiveMeeting(meeting);
-    if (meeting) {
-      refreshMeetingData(meeting.id);
-    }
-  };
-
   const handleAddParticipant = (p: Participant) => {
     if (selectedCondo) {
-      createVoter(p.name, p.email, p.password || 'pass123', selectedCondo.id);
+      createVoter(p.name, p.email, p.password || '1234', selectedCondo.id);
       refreshCondoData(selectedCondo.id);
     }
   };
@@ -158,30 +176,65 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddResolution = (r: Resolution) => {
+  const handleAddResolution = (res: Resolution) => {
+    saveResolution(res);
     if (activeMeeting) {
-      saveResolution({ ...r, meetingId: activeMeeting.id });
       refreshMeetingData(activeMeeting.id);
     }
   };
 
   const handleUpdateStatus = (id: string, status: ResolutionStatus) => {
     updateResStatus(id, status);
-    if (activeMeeting) refreshMeetingData(activeMeeting.id);
+    if (activeMeeting) {
+      refreshMeetingData(activeMeeting.id);
+    }
   };
 
   const handleVote = (resId: string, option: VoteOption) => {
-    if (!currentUser) return;
-    registerVote(resId, currentUser.id, option);
-    if (activeMeeting) refreshMeetingData(activeMeeting.id);
+    if (currentUser) {
+      registerVote(resId, currentUser.id, option);
+      if (activeMeeting) {
+        refreshMeetingData(activeMeeting.id);
+      }
+    }
   };
 
   if (!dbReady) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center space-y-4">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-        <p className="text-slate-500 font-medium animate-pulse">Initialisation de la base sécurisée...</p>
-      </div>
+      <Layout onLogout={() => {}}>
+        <div className="max-w-2xl mx-auto mt-20 p-8 bg-white rounded-3xl shadow-xl border border-slate-100 text-center">
+          <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8.1.79 8 4" />
+            </svg>
+          </div>
+          <h1 className="text-3xl font-extrabold text-slate-900 mb-2">Source de Données</h1>
+          <p className="text-slate-500 mb-10">Choisissez comment vous souhaitez accéder à vos données de copropriété.</p>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <button 
+              onClick={startWithBrowserStorage}
+              className="p-6 border-2 border-slate-100 rounded-2xl text-left hover:border-indigo-500 hover:bg-indigo-50 transition-all group"
+            >
+              <h3 className="font-bold text-slate-800 mb-1 group-hover:text-indigo-700">Stockage Navigateur</h3>
+              <p className="text-xs text-slate-500">Données persistantes dans le cache de ce navigateur uniquement.</p>
+            </button>
+            <button 
+              onClick={startWithLocalFile}
+              className="p-6 border-2 border-slate-100 rounded-2xl text-left hover:border-indigo-500 hover:bg-indigo-50 transition-all group"
+            >
+              <h3 className="font-bold text-slate-800 mb-1 group-hover:text-indigo-700">Ouvrir un fichier .sqlite</h3>
+              <p className="text-xs text-slate-500">Travailler directement sur un fichier stocké sur votre ordinateur.</p>
+            </button>
+            <button 
+              onClick={startWithNewFile}
+              className="md:col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-600 hover:bg-slate-100 transition-all"
+            >
+              + Créer une nouvelle base locale
+            </button>
+          </div>
+        </div>
+      </Layout>
     );
   }
 
@@ -189,7 +242,13 @@ const App: React.FC = () => {
     return (
       <Layout onLogout={logout}>
         <div className="max-w-md mx-auto mt-20">
-          <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
+          <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 relative">
+            {dbMode === 'local' && (
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-green-500 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-lg flex items-center">
+                <span className="w-1.5 h-1.5 bg-white rounded-full mr-2 animate-pulse"></span>
+                Connecté : {fileName}
+              </div>
+            )}
             <div className="text-center mb-8">
               <h1 className="text-3xl font-extrabold text-slate-900 mb-2">Accès Sécurisé</h1>
               <p className="text-slate-500 text-sm">Portail de vote de votre copropriété.</p>
@@ -240,18 +299,10 @@ const App: React.FC = () => {
                 Se connecter
               </button>
             </form>
+            <button onClick={() => setDbReady(false)} className="w-full mt-6 text-xs text-slate-400 hover:text-indigo-600 transition-colors">
+              Changer de base de données
+            </button>
           </div>
-          
-          <style>{`
-            @keyframes shake {
-              0%, 100% { transform: translateX(0); }
-              25% { transform: translateX(-4px); }
-              75% { transform: translateX(4px); }
-            }
-            .animate-shake {
-              animation: shake 0.2s ease-in-out 0s 2;
-            }
-          `}</style>
         </div>
       </Layout>
     );
