@@ -8,6 +8,7 @@ import {
   initDatabase, 
   queryLogin, 
   createVoter, 
+  updateVoter,
   getVoters, 
   getCondominium,
   getCondominiums,
@@ -24,6 +25,7 @@ const App: React.FC = () => {
   const [dbReady, setDbReady] = useState(false);
   const [role, setRole] = useState<RoleType | null>(null);
   const [currentUser, setCurrentUser] = useState<UserLogin | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
   
   // Condominium Navigation
   const [condominiums, setCondominiums] = useState<Condominium[]>([]);
@@ -78,6 +80,7 @@ const App: React.FC = () => {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError(null);
     const user = queryLogin(loginForm.email, loginForm.password);
     if (user) {
       setRole(user.role as RoleType);
@@ -91,10 +94,7 @@ const App: React.FC = () => {
       if (user.role === 'VOTER') {
         const condo = getCondominium(user.condominium_id);
         setSelectedCondo(condo as any);
-        // Voters automatically join the last active/relevant meeting or all resolutions of the condo
         const condoMeetings = getMeetings(user.condominium_id);
-        // For voter simplicity, we aggregate all resolutions of the condo's current meetings
-        // Simplified for now: just load all resolutions of the last meeting
         if (condoMeetings.length > 0) {
           const lastMeeting = condoMeetings[0];
           setActiveMeeting(lastMeeting as any);
@@ -103,7 +103,7 @@ const App: React.FC = () => {
         }
       }
     } else {
-      alert("Identifiants incorrects.");
+      setLoginError("Identifiants ou mot de passe incorrects.");
     }
   };
 
@@ -114,6 +114,7 @@ const App: React.FC = () => {
     setActiveMeeting(null);
     setMeetings([]);
     setLoginForm({ email: '', password: '' });
+    setLoginError(null);
   };
 
   const handleCreateCondo = (name: string, address: string) => {
@@ -146,6 +147,13 @@ const App: React.FC = () => {
   const handleAddParticipant = (p: Participant) => {
     if (selectedCondo) {
       createVoter(p.name, p.email, p.password || 'pass123', selectedCondo.id);
+      refreshCondoData(selectedCondo.id);
+    }
+  };
+
+  const handleUpdateParticipant = (p: Participant) => {
+    if (selectedCondo) {
+      updateVoter(p.id, p.name, p.email);
       refreshCondoData(selectedCondo.id);
     }
   };
@@ -186,14 +194,27 @@ const App: React.FC = () => {
               <h1 className="text-3xl font-extrabold text-slate-900 mb-2">Accès Sécurisé</h1>
               <p className="text-slate-500 text-sm">Portail de vote de votre copropriété.</p>
             </div>
+            
+            {loginError && (
+              <div className="mb-6 p-4 bg-red-50 border border-red-100 text-red-700 text-sm rounded-xl flex items-center animate-shake">
+                <svg className="w-5 h-5 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {loginError}
+              </div>
+            )}
+
             <form onSubmit={handleLogin} className="space-y-6">
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Identifiant ou Email</label>
                 <input 
                   type="text" 
                   value={loginForm.email}
-                  onChange={e => setLoginForm({...loginForm, email: e.target.value})}
-                  className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  onChange={e => {
+                    setLoginForm({...loginForm, email: e.target.value});
+                    if (loginError) setLoginError(null);
+                  }}
+                  className={`w-full px-5 py-3 bg-slate-50 border rounded-xl focus:ring-2 outline-none transition-all ${loginError ? 'border-red-300 ring-red-100' : 'border-slate-200 focus:ring-indigo-500'}`}
                   placeholder="votre@mail.com ou 'Admin'"
                   required
                 />
@@ -203,8 +224,11 @@ const App: React.FC = () => {
                 <input 
                   type="password" 
                   value={loginForm.password}
-                  onChange={e => setLoginForm({...loginForm, password: e.target.value})}
-                  className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  onChange={e => {
+                    setLoginForm({...loginForm, password: e.target.value});
+                    if (loginError) setLoginError(null);
+                  }}
+                  className={`w-full px-5 py-3 bg-slate-50 border rounded-xl focus:ring-2 outline-none transition-all ${loginError ? 'border-red-300 ring-red-100' : 'border-slate-200 focus:ring-indigo-500'}`}
                   placeholder="••••••••"
                   required
                 />
@@ -217,6 +241,17 @@ const App: React.FC = () => {
               </button>
             </form>
           </div>
+          
+          <style>{`
+            @keyframes shake {
+              0%, 100% { transform: translateX(0); }
+              25% { transform: translateX(-4px); }
+              75% { transform: translateX(4px); }
+            }
+            .animate-shake {
+              animation: shake 0.2s ease-in-out 0s 2;
+            }
+          `}</style>
         </div>
       </Layout>
     );
@@ -237,6 +272,7 @@ const App: React.FC = () => {
           onSelectMeeting={handleSelectMeeting}
           onCreateMeeting={handleCreateNewMeeting}
           onAddParticipant={handleAddParticipant}
+          onUpdateParticipant={handleUpdateParticipant}
           onAddResolution={handleAddResolution}
           onUpdateResolutionStatus={handleUpdateStatus}
         />

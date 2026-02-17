@@ -17,6 +17,7 @@ interface LeaderBoardProps {
   onSelectMeeting: (meeting: GeneralMeeting | null) => void;
   onCreateMeeting: (title: string, date: string) => void;
   onAddParticipant: (p: Participant) => void;
+  onUpdateParticipant: (p: Participant) => void;
   onAddResolution: (r: Resolution) => void;
   onUpdateResolutionStatus: (id: string, status: ResolutionStatus) => void;
 }
@@ -33,6 +34,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   onSelectMeeting,
   onCreateMeeting,
   onAddParticipant, 
+  onUpdateParticipant,
   onAddResolution,
   onUpdateResolutionStatus 
 }) => {
@@ -46,7 +48,9 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   const [showNewMeetingForm, setShowNewMeetingForm] = useState(false);
   const [newMeeting, setNewMeeting] = useState({ title: '', date: new Date().toISOString().split('T')[0] });
 
-  const [newVoter, setNewVoter] = useState({ name: '', email: '', password: '' });
+  // Voter management
+  const [newVoter, setNewVoter] = useState({ id: '', name: '', email: '', password: '' });
+  const [editingVoterId, setEditingVoterId] = useState<string | null>(null);
   
   // Resolution Draft
   const [newTitle, setNewTitle] = useState('');
@@ -69,15 +73,34 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     setShowNewMeetingForm(false);
   };
 
-  const handleAddVoter = (e: React.FormEvent) => {
+  const handleVoterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onAddParticipant({
-      id: Math.random().toString(36).substr(2, 9),
-      name: newVoter.name,
-      email: newVoter.email,
-      password: newVoter.password
-    });
-    setNewVoter({ name: '', email: '', password: '' });
+    if (editingVoterId) {
+      onUpdateParticipant({
+        id: editingVoterId,
+        name: newVoter.name,
+        email: newVoter.email
+      });
+      setEditingVoterId(null);
+    } else {
+      onAddParticipant({
+        id: Math.random().toString(36).substr(2, 9),
+        name: newVoter.name,
+        email: newVoter.email,
+        password: newVoter.password
+      });
+    }
+    setNewVoter({ id: '', name: '', email: '', password: '' });
+  };
+
+  const startEditingVoter = (p: Participant) => {
+    setEditingVoterId(p.id);
+    setNewVoter({ id: p.id, name: p.name, email: p.email, password: '' });
+  };
+
+  const cancelVoterEdit = () => {
+    setEditingVoterId(null);
+    setNewVoter({ id: '', name: '', email: '', password: '' });
   };
 
   const handleDraftResolution = async () => {
@@ -106,6 +129,57 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     });
     setNewTitle('');
     setNewRes('');
+  };
+
+  const handleCloseVote = (res: Resolution) => {
+    const votedCount = res.votes.length;
+    const totalVoters = participants.length;
+    
+    if (votedCount === 0) {
+      const confirmed = window.confirm("Aucun vote n'a été enregistré pour cette résolution. Voulez-vous vraiment clôturer le scrutin maintenant ?");
+      if (!confirmed) return;
+    } else if (votedCount < totalVoters) {
+      const confirmed = window.confirm(`${votedCount} ont voté (sur ${totalVoters}). Voulez-vous vraiment clôturer ce vote alors qu'il manque des votants ?`);
+      if (!confirmed) return;
+    }
+    
+    onUpdateResolutionStatus(res.id, ResolutionStatus.CLOSED);
+  };
+
+  const getResolutionResultBadge = (res: Resolution) => {
+    if (res.status !== ResolutionStatus.CLOSED) return null;
+    
+    const forVotes = res.votes.filter(v => v.option === VoteOption.YES).length;
+    const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
+    
+    // Si aucun vote n'a été exprimé
+    if (forVotes === 0 && againstVotes === 0) {
+      return (
+        <span className="bg-slate-100 text-slate-500 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-slate-200">
+          Aucun vote
+        </span>
+      );
+    }
+
+    if (forVotes > againstVotes) {
+      return (
+        <span className="bg-green-100 text-green-800 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-green-200">
+          Adopté
+        </span>
+      );
+    } else if (againstVotes > forVotes) {
+      return (
+        <span className="bg-red-100 text-red-800 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-red-200">
+          Rejeté
+        </span>
+      );
+    } else {
+      return (
+        <span className="bg-amber-100 text-amber-800 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-amber-200">
+          Égalité
+        </span>
+      );
+    }
   };
 
   const getVoteData = (resolution: Resolution) => {
@@ -260,8 +334,10 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
       {activeTab === 'coproprietaires' && (
         <div className="grid md:grid-cols-3 gap-6 animate-fade-in">
           <div className="md:col-span-1 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-fit">
-            <h3 className="text-lg font-bold mb-4 text-slate-800">Nouveau Votant</h3>
-            <form onSubmit={handleAddVoter} className="space-y-4">
+            <h3 className="text-lg font-bold mb-4 text-slate-800">
+              {editingVoterId ? 'Modifier Votant' : 'Nouveau Votant'}
+            </h3>
+            <form onSubmit={handleVoterSubmit} className="space-y-4">
               <input 
                 placeholder="Nom complet" 
                 className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
@@ -277,17 +353,26 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                 onChange={e => setNewVoter({...newVoter, email: e.target.value})}
                 required
               />
-              <input 
-                type="password" 
-                placeholder="Mot de passe" 
-                className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                value={newVoter.password}
-                onChange={e => setNewVoter({...newVoter, password: e.target.value})}
-                required
-              />
-              <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded-lg font-bold hover:bg-indigo-700 transition-colors">
-                Enregistrer
-              </button>
+              {!editingVoterId && (
+                <input 
+                  type="password" 
+                  placeholder="Mot de passe" 
+                  className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
+                  value={newVoter.password}
+                  onChange={e => setNewVoter({...newVoter, password: e.target.value})}
+                  required
+                />
+              )}
+              <div className="flex gap-2">
+                <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold hover:bg-indigo-700 transition-colors">
+                  {editingVoterId ? 'Mettre à jour' : 'Enregistrer'}
+                </button>
+                {editingVoterId && (
+                  <button type="button" onClick={cancelVoterEdit} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg font-bold hover:bg-slate-200 transition-colors">
+                    Annuler
+                  </button>
+                )}
+              </div>
             </form>
           </div>
           <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
@@ -296,13 +381,22 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                 <tr>
                   <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Participant</th>
                   <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Email</th>
+                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {participants.map(p => (
-                  <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors group">
                     <td className="px-6 py-4 font-medium text-slate-800">{p.name}</td>
                     <td className="px-6 py-4 text-slate-600">{p.email}</td>
+                    <td className="px-6 py-4 text-right">
+                       <button 
+                        onClick={() => startEditingVoter(p)}
+                        className="text-indigo-600 hover:text-indigo-900 font-bold text-xs uppercase p-2 rounded hover:bg-indigo-50 transition-all opacity-0 group-hover:opacity-100"
+                       >
+                         Modifier
+                       </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -428,7 +522,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                               res.status === ResolutionStatus.ACTIVE ? 'bg-green-100 text-green-700' : 
                               res.status === ResolutionStatus.CLOSED ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'
                             }`}>
-                              {res.status}
+                              {res.status === ResolutionStatus.ACTIVE ? 'SCRUTIN OUVERT' : res.status === ResolutionStatus.CLOSED ? 'CLOS' : 'À VENIR'}
                             </span>
                           </div>
                           <p className="text-sm text-slate-500 line-clamp-1">{res.description}</p>
@@ -438,8 +532,9 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                             <button onClick={() => onUpdateResolutionStatus(res.id, ResolutionStatus.ACTIVE)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Ouvrir vote</button>
                           )}
                           {res.status === ResolutionStatus.ACTIVE && (
-                            <button onClick={() => onUpdateResolutionStatus(res.id, ResolutionStatus.CLOSED)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Clôturer</button>
+                            <button onClick={() => handleCloseVote(res)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Clôturer</button>
                           )}
+                          {res.status === ResolutionStatus.CLOSED && getResolutionResultBadge(res)}
                         </div>
                       </div>
                     ))}

@@ -3,7 +3,7 @@ import initSqlJs from 'sql.js';
 
 let db: any = null;
 
-const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v4';
+const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v5';
 
 export const initDatabase = async () => {
   try {
@@ -96,10 +96,30 @@ const setupSchema = () => {
 };
 
 const seedInitialData = () => {
+  // Roles
   db.run("INSERT OR IGNORE INTO roles (name) VALUES ('MANAGER'), ('VOTER')");
-  db.run("INSERT OR IGNORE INTO condominiums (name, address) VALUES ('Résidence Les Pins', '123 Avenue du Soleil, 75001 Paris')");
+  
+  // Condominium
+  db.run("INSERT OR IGNORE INTO condominiums (id, name, address) VALUES (1, 'Résidence Les Pins', '123 Avenue du Soleil, 75001 Paris')");
+  
+  // Manager account
   db.run("INSERT OR IGNORE INTO logins (name, email, password, condominium_id, role_id) VALUES ('Administrateur', 'Admin', 'admin123', 1, 1)");
-  db.run("INSERT OR IGNORE INTO general_meetings (condominium_id, date, title) VALUES (1, '2024-06-15', 'Assemblée Générale Annuelle 2024')");
+  
+  // 5 Example Voters for testing
+  const voters = [
+    ['Jean Dupont', 'jean.dupont@mail.com'],
+    ['Marie Lefebvre', 'marie.le@mail.com'],
+    ['Paul Martin', 'paul.martin@mail.com'],
+    ['Sylvie Durand', 'sylvie.durand@mail.com'],
+    ['Thomas Bernard', 'thomas.be@mail.com']
+  ];
+  
+  voters.forEach(([name, email]) => {
+    db.run("INSERT OR IGNORE INTO logins (name, email, password, condominium_id, role_id) VALUES (?, ?, '1234', 1, 2)", [name, email]);
+  });
+
+  // Initial meeting
+  db.run("INSERT OR IGNORE INTO general_meetings (id, condominium_id, date, title) VALUES (1, 1, '2024-06-15', 'Assemblée Générale Annuelle 2024')");
 };
 
 export const persistDatabase = () => {
@@ -270,12 +290,18 @@ export const getCondominium = (id: number) => {
   return result;
 };
 
-export const createVoter = (name: string, email: string, password: string = 'pass123', condoId: number) => {
+export const createVoter = (name: string, email: string, password: string = '1234', condoId: number) => {
   if (!db) return;
   db.run(`
     INSERT INTO logins (name, email, password, condominium_id, role_id)
     VALUES (?, ?, ?, ?, 2)
   `, [name, email, password, condoId]);
+  persistDatabase();
+};
+
+export const updateVoter = (id: string, name: string, email: string) => {
+  if (!db) return;
+  db.run("UPDATE logins SET name = ?, email = ? WHERE id = ?", [name, email, id]);
   persistDatabase();
 };
 
