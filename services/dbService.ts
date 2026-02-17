@@ -5,15 +5,18 @@ let db: any = null;
 
 const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v5';
 
+/**
+ * Initialise la base de données SQLite en mémoire avec persistance dans le localStorage.
+ * Utilise SQL.js avec chargement du binaire WASM via un CDN fiable.
+ */
 export const initDatabase = async () => {
-  try {
-    const wasmUrl = 'https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/sql-wasm.wasm';
-    const wasmResponse = await fetch(wasmUrl);
-    if (!wasmResponse.ok) throw new Error(`WASM fetch failed: ${wasmResponse.statusText}`);
-    const wasmBinary = await wasmResponse.arrayBuffer();
+  if (db) return db;
 
+  try {
+    // On utilise la version 1.12.0 qui est celle définie dans le package.json
+    // jsDelivr est configuré ici pour servir le fichier .wasm avec le bon type MIME (application/wasm)
     const SQL = await initSqlJs({
-      wasmBinary: wasmBinary
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/${file}`
     });
 
     const savedDb = localStorage.getItem(DB_STORAGE_KEY);
@@ -22,7 +25,7 @@ export const initDatabase = async () => {
         const uint8Array = new Uint8Array(JSON.parse(savedDb));
         db = new SQL.Database(uint8Array);
       } catch (e) {
-        console.warn("Resetting database...", e);
+        console.warn("Échec du chargement de la base sauvegardée, réinitialisation...", e);
         db = new SQL.Database();
         setupSchema();
         seedInitialData();
@@ -35,8 +38,21 @@ export const initDatabase = async () => {
     }
     return db;
   } catch (err) {
-    console.error("CRITICAL: SQL.js initialization failed", err);
-    throw err;
+    console.error("ERREUR CRITIQUE : Impossible d'initialiser SQL.js", err);
+    
+    // Tentative ultime de secours via un autre CDN (cdnjs)
+    try {
+      const SQLFallback = await initSqlJs({
+        locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
+      });
+      db = new SQLFallback.Database();
+      setupSchema();
+      seedInitialData();
+      return db;
+    } catch (fallbackErr) {
+      console.error("L'initialisation de secours a également échoué.", fallbackErr);
+      throw fallbackErr;
+    }
   }
 };
 
@@ -129,58 +145,54 @@ export const persistDatabase = () => {
   }
 };
 
-/**
- * Dynamically introspects the SQLite database to return metadata about tables and relationships.
- * This allows the UI to render an ER diagram without hardcoded schema knowledge.
- */
 export const getDatabaseSchema = () => {
   if (!db) return { tables: [] };
 
   const tables = [];
-  const tableStmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
-  
-  while (tableStmt.step()) {
-    const tableName = tableStmt.getAsObject().name;
+  try {
+    const tableStmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
     
-    // Get columns
-    const columns = [];
-    const colStmt = db.prepare(`PRAGMA table_info(${tableName})`);
-    while (colStmt.step()) {
-      const col = colStmt.getAsObject();
-      columns.push({
-        name: col.name,
-        type: col.type,
-        pk: col.pk === 1,
-        notnull: col.notnull === 1
+    while (tableStmt.step()) {
+      const tableName = tableStmt.getAsObject().name;
+      const columns = [];
+      const colStmt = db.prepare(`PRAGMA table_info(${tableName})`);
+      while (colStmt.step()) {
+        const col = colStmt.getAsObject();
+        columns.push({
+          name: col.name,
+          type: col.type,
+          pk: col.pk === 1,
+          notnull: col.notnull === 1
+        });
+      }
+      colStmt.free();
+
+      const foreignKeys = [];
+      const fkStmt = db.prepare(`PRAGMA foreign_key_list(${tableName})`);
+      while (fkStmt.step()) {
+        const fk = fkStmt.getAsObject();
+        foreignKeys.push({
+          from: fk.from,
+          toTable: fk.table,
+          toColumn: fk.to
+        });
+      }
+      fkStmt.free();
+
+      tables.push({
+        name: tableName,
+        columns,
+        foreignKeys
       });
     }
-    colStmt.free();
-
-    // Get foreign keys
-    const foreignKeys = [];
-    const fkStmt = db.prepare(`PRAGMA foreign_key_list(${tableName})`);
-    while (fkStmt.step()) {
-      const fk = fkStmt.getAsObject();
-      foreignKeys.push({
-        from: fk.from,
-        toTable: fk.table,
-        toColumn: fk.to
-      });
-    }
-    fkStmt.free();
-
-    tables.push({
-      name: tableName,
-      columns,
-      foreignKeys
-    });
+    tableStmt.free();
+  } catch (err) {
+    console.error("Erreur lors de l'extraction du schéma", err);
   }
-  tableStmt.free();
 
   return { tables };
 };
 
-// --- CONDOMINIUMS ---
 export const getCondominiums = () => {
   if (!db) return [];
   const stmt = db.prepare("SELECT * FROM condominiums");
@@ -196,7 +208,6 @@ export const createCondominium = (name: string, address: string) => {
   persistDatabase();
 };
 
-// --- LOGINS ---
 export const queryLogin = (email: string, password: string) => {
   if (!db) return null;
   const stmt = db.prepare(`
@@ -218,7 +229,6 @@ export const updateUserPassword = (userId: number, newPassword: string) => {
   persistDatabase();
 };
 
-// --- GENERAL MEETINGS ---
 export const getMeetings = (condoId: number) => {
   if (!db) return [];
   const stmt = db.prepare("SELECT * FROM general_meetings WHERE condominium_id = ? ORDER BY date DESC");
@@ -235,7 +245,6 @@ export const createMeeting = (condoId: number, title: string, date: string) => {
   persistDatabase();
 };
 
-// --- RESOLUTIONS ---
 export const saveResolution = (res: any) => {
   if (!db) return;
   db.run(`
@@ -269,7 +278,6 @@ export const getAllResolutions = (meetingId: number) => {
   return results;
 };
 
-// --- VOTES ---
 export const registerVote = (resId: string, voterId: number, option: string) => {
   if (!db) return;
   db.run(`
@@ -279,7 +287,6 @@ export const registerVote = (resId: string, voterId: number, option: string) => 
   persistDatabase();
 };
 
-// --- CONDO & VOTERS ---
 export const getCondominium = (id: number) => {
   if (!db) return null;
   const stmt = db.prepare("SELECT * FROM condominiums WHERE id = ?");
