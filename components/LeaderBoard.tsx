@@ -41,6 +41,14 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   const [activeTab, setActiveTab] = useState<'coproprietaires' | 'meetings' | 'schema'>('coproprietaires');
   const [meetingTab, setMeetingTab] = useState<'resolutions' | 'results'>('resolutions');
   
+  // Custom Confirmation Modal State
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
   // Forms
   const [showNewCondoForm, setShowNewCondoForm] = useState(false);
   const [newCondo, setNewCondo] = useState({ name: '', address: '' });
@@ -135,15 +143,27 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     const votedCount = res.votes.length;
     const totalVoters = participants.length;
     
+    let message = "";
     if (votedCount === 0) {
-      const confirmed = window.confirm("Aucun vote n'a été enregistré pour cette résolution. Voulez-vous vraiment clôturer le scrutin maintenant ?");
-      if (!confirmed) return;
+      message = "Attention : aucun vote n'a été enregistré pour cette résolution. Voulez-vous vraiment clôturer le scrutin maintenant ?";
     } else if (votedCount < totalVoters) {
-      const confirmed = window.confirm(`${votedCount} ont voté (sur ${totalVoters}). Voulez-vous vraiment clôturer ce vote alors qu'il manque des votants ?`);
-      if (!confirmed) return;
+      message = `${votedCount} copropriétaires ont voté sur ${totalVoters} inscrits. Voulez-vous vraiment clôturer ce vote alors qu'il manque des participants ?`;
     }
-    
-    onUpdateResolutionStatus(res.id, ResolutionStatus.CLOSED);
+
+    if (message) {
+      setConfirmDialog({
+        isOpen: true,
+        title: "Confirmer la clôture",
+        message: message,
+        onConfirm: () => {
+          onUpdateResolutionStatus(res.id, ResolutionStatus.CLOSED);
+          setConfirmDialog(null);
+        }
+      });
+    } else {
+      // Clôture directe si tout le monde a voté
+      onUpdateResolutionStatus(res.id, ResolutionStatus.CLOSED);
+    }
   };
 
   const getResolutionResultBadge = (res: Resolution) => {
@@ -152,7 +172,6 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     const forVotes = res.votes.filter(v => v.option === VoteOption.YES).length;
     const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
     
-    // Si aucun vote n'a été exprimé
     if (forVotes === 0 && againstVotes === 0) {
       return (
         <span className="bg-slate-100 text-slate-500 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-slate-200">
@@ -192,7 +211,45 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     ];
   };
 
-  // --- Sub-Views ---
+  // --- Render Functions ---
+
+  const renderConfirmationModal = () => {
+    if (!confirmDialog || !confirmDialog.isOpen) return null;
+
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-scale-up border border-slate-100">
+          <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-6">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h3 className="text-xl font-bold text-slate-900 mb-2">{confirmDialog.title}</h3>
+          <p className="text-slate-600 mb-8 leading-relaxed">{confirmDialog.message}</p>
+          <div className="flex space-x-3">
+            <button 
+              onClick={() => setConfirmDialog(null)}
+              className="flex-1 px-4 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all"
+            >
+              Annuler
+            </button>
+            <button 
+              onClick={confirmDialog.onConfirm}
+              className="flex-1 px-4 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg shadow-red-100 hover:bg-red-700 transition-all"
+            >
+              Confirmer
+            </button>
+          </div>
+        </div>
+        <style>{`
+          @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+          @keyframes scaleUp { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+          .animate-fade-in { animation: fadeIn 0.2s ease-out; }
+          .animate-scale-up { animation: scaleUp 0.2s ease-out; }
+        `}</style>
+      </div>
+    );
+  };
 
   // 1. SELECT CONDO VIEW
   if (!selectedCondo) {
@@ -288,6 +345,8 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   // 2. CONDO ACTIVE VIEW
   return (
     <div className="space-y-6">
+      {renderConfirmationModal()}
+      
       <div className="flex items-center space-x-4 mb-4">
         <button onClick={() => onSelectCondo(null)} className="p-2 hover:bg-slate-200 rounded-lg transition-colors">
           <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
@@ -513,31 +572,37 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                   </div>
 
                   <div className="grid gap-4">
-                    {resolutions.map(res => (
-                      <div key={res.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex justify-between items-center">
-                        <div className="max-w-2xl">
-                          <div className="flex items-center space-x-2 mb-1">
-                            <span className="font-bold text-slate-800">{res.title}</span>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                              res.status === ResolutionStatus.ACTIVE ? 'bg-green-100 text-green-700' : 
-                              res.status === ResolutionStatus.CLOSED ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'
-                            }`}>
-                              {res.status === ResolutionStatus.ACTIVE ? 'SCRUTIN OUVERT' : res.status === ResolutionStatus.CLOSED ? 'CLOS' : 'À VENIR'}
-                            </span>
+                    {resolutions.map(res => {
+                      const participationPercent = participants.length > 0 ? Math.round((res.votes.length / participants.length) * 100) : 0;
+                      
+                      return (
+                        <div key={res.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex justify-between items-center">
+                          <div className="max-w-2xl">
+                            <div className="flex items-center space-x-2 mb-1">
+                              <span className="font-bold text-slate-800">{res.title}</span>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase whitespace-nowrap ${
+                                res.status === ResolutionStatus.ACTIVE ? 'bg-green-100 text-green-700' : 
+                                res.status === ResolutionStatus.CLOSED ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'
+                              }`}>
+                                {res.status === ResolutionStatus.ACTIVE ? 'SCRUTIN OUVERT' : 
+                                 res.status === ResolutionStatus.CLOSED ? `CLOS (votants: ${participationPercent}%)` : 
+                                 'À VENIR'}
+                              </span>
+                            </div>
+                            <p className="text-sm text-slate-500 line-clamp-1">{res.description}</p>
                           </div>
-                          <p className="text-sm text-slate-500 line-clamp-1">{res.description}</p>
+                          <div className="flex space-x-2">
+                            {res.status === ResolutionStatus.PENDING && (
+                              <button onClick={() => onUpdateResolutionStatus(res.id, ResolutionStatus.ACTIVE)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Ouvrir vote</button>
+                            )}
+                            {res.status === ResolutionStatus.ACTIVE && (
+                              <button onClick={() => handleCloseVote(res)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Clôturer</button>
+                            )}
+                            {res.status === ResolutionStatus.CLOSED && getResolutionResultBadge(res)}
+                          </div>
                         </div>
-                        <div className="flex space-x-2">
-                          {res.status === ResolutionStatus.PENDING && (
-                            <button onClick={() => onUpdateResolutionStatus(res.id, ResolutionStatus.ACTIVE)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Ouvrir vote</button>
-                          )}
-                          {res.status === ResolutionStatus.ACTIVE && (
-                            <button onClick={() => handleCloseVote(res)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Clôturer</button>
-                          )}
-                          {res.status === ResolutionStatus.CLOSED && getResolutionResultBadge(res)}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
