@@ -3,7 +3,7 @@ import initSqlJs from 'sql.js';
 
 let db: any = null;
 
-const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v3';
+const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v4';
 
 export const initDatabase = async () => {
   try {
@@ -97,9 +97,9 @@ const setupSchema = () => {
 
 const seedInitialData = () => {
   db.run("INSERT OR IGNORE INTO roles (name) VALUES ('MANAGER'), ('VOTER')");
-  db.run("INSERT INTO condominiums (name, address) VALUES ('Résidence Les Pins', '123 Avenue du Soleil, 75001 Paris')");
-  db.run("INSERT OR IGNORE INTO logins (name, email, password, condominium_id, role_id) VALUES ('Jean Manager', 'admin@copro.com', 'admin123', 1, 1)");
-  db.run("INSERT INTO general_meetings (condominium_id, date, title) VALUES (1, '2024-06-15', 'Assemblée Générale Annuelle 2024')");
+  db.run("INSERT OR IGNORE INTO condominiums (name, address) VALUES ('Résidence Les Pins', '123 Avenue du Soleil, 75001 Paris')");
+  db.run("INSERT OR IGNORE INTO logins (name, email, password, condominium_id, role_id) VALUES ('Administrateur', 'Admin', 'admin123', 1, 1)");
+  db.run("INSERT OR IGNORE INTO general_meetings (condominium_id, date, title) VALUES (1, '2024-06-15', 'Assemblée Générale Annuelle 2024')");
 };
 
 export const persistDatabase = () => {
@@ -107,6 +107,73 @@ export const persistDatabase = () => {
     const data = db.export();
     localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(Array.from(data)));
   }
+};
+
+/**
+ * Dynamically introspects the SQLite database to return metadata about tables and relationships.
+ * This allows the UI to render an ER diagram without hardcoded schema knowledge.
+ */
+export const getDatabaseSchema = () => {
+  if (!db) return { tables: [] };
+
+  const tables = [];
+  const tableStmt = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+  
+  while (tableStmt.step()) {
+    const tableName = tableStmt.getAsObject().name;
+    
+    // Get columns
+    const columns = [];
+    const colStmt = db.prepare(`PRAGMA table_info(${tableName})`);
+    while (colStmt.step()) {
+      const col = colStmt.getAsObject();
+      columns.push({
+        name: col.name,
+        type: col.type,
+        pk: col.pk === 1,
+        notnull: col.notnull === 1
+      });
+    }
+    colStmt.free();
+
+    // Get foreign keys
+    const foreignKeys = [];
+    const fkStmt = db.prepare(`PRAGMA foreign_key_list(${tableName})`);
+    while (fkStmt.step()) {
+      const fk = fkStmt.getAsObject();
+      foreignKeys.push({
+        from: fk.from,
+        toTable: fk.table,
+        toColumn: fk.to
+      });
+    }
+    fkStmt.free();
+
+    tables.push({
+      name: tableName,
+      columns,
+      foreignKeys
+    });
+  }
+  tableStmt.free();
+
+  return { tables };
+};
+
+// --- CONDOMINIUMS ---
+export const getCondominiums = () => {
+  if (!db) return [];
+  const stmt = db.prepare("SELECT * FROM condominiums");
+  const results = [];
+  while (stmt.step()) results.push(stmt.getAsObject());
+  stmt.free();
+  return results;
+};
+
+export const createCondominium = (name: string, address: string) => {
+  if (!db) return;
+  db.run("INSERT INTO condominiums (name, address) VALUES (?, ?)", [name, address]);
+  persistDatabase();
 };
 
 // --- LOGINS ---
@@ -128,6 +195,23 @@ export const queryLogin = (email: string, password: string) => {
 export const updateUserPassword = (userId: number, newPassword: string) => {
   if (!db) return;
   db.run("UPDATE logins SET password = ? WHERE id = ?", [newPassword, userId]);
+  persistDatabase();
+};
+
+// --- GENERAL MEETINGS ---
+export const getMeetings = (condoId: number) => {
+  if (!db) return [];
+  const stmt = db.prepare("SELECT * FROM general_meetings WHERE condominium_id = ? ORDER BY date DESC");
+  stmt.bind([condoId]);
+  const results = [];
+  while (stmt.step()) results.push(stmt.getAsObject());
+  stmt.free();
+  return results;
+};
+
+export const createMeeting = (condoId: number, title: string, date: string) => {
+  if (!db) return;
+  db.run("INSERT INTO general_meetings (condominium_id, title, date) VALUES (?, ?, ?)", [condoId, title, date]);
   persistDatabase();
 };
 
@@ -154,7 +238,6 @@ export const getAllResolutions = (meetingId: number) => {
   const results = [];
   while (stmt.step()) {
     const res = stmt.getAsObject();
-    // Fetch votes for this resolution
     const voteStmt = db.prepare("SELECT voter_id as voterId, option, timestamp FROM votes WHERE resolution_id = ?");
     voteStmt.bind([res.id]);
     const votes = [];
