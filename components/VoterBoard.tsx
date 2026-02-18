@@ -69,8 +69,9 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, onVot
                 <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
                 <h3 className="text-xl font-bold text-slate-800">Scrutins en cours</h3>
               </div>
-              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                Mise à jour en temps réel
+              <div className="flex items-center text-[10px] text-indigo-600 font-bold uppercase tracking-wider bg-indigo-50 px-2 py-1 rounded-md">
+                <span className="w-2 h-2 bg-indigo-600 rounded-full mr-2 animate-ping"></span>
+                Live Sync Connecté
               </div>
             </div>
             
@@ -91,12 +92,12 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, onVot
                   const myChoice = getMyVote(res);
 
                   return (
-                    <div key={res.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden border-l-4 border-l-indigo-600">
+                    <div key={res.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden border-l-4 border-l-indigo-600 animate-slide-in">
                       <div className="p-6">
                         <div className="flex justify-between items-start mb-3">
                            <h4 className="text-xl font-bold text-slate-800">{res.title}</h4>
                            {voted && (
-                             <span className="flex items-center text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full uppercase">
+                             <span className="flex items-center text-[10px] font-bold text-green-600 bg-green-50 px-2 py-1 rounded-full uppercase border border-green-100">
                                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
                                Bulletin déposé
                              </span>
@@ -255,6 +256,10 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, onVot
           </div>
         </div>
       )}
+      <style>{`
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-slide-in { animation: slideIn 0.3s ease-out; }
+      `}</style>
     </div>
   );
 };

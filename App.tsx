@@ -65,6 +65,28 @@ const App: React.FC = () => {
     setResolutions(resFromDb as any);
   }, []);
 
+  // Écoute des événements de synchronisation temps réel (Simulateur SSE)
+  useEffect(() => {
+    const syncChannel = new BroadcastChannel('covote_sync');
+    syncChannel.onmessage = async (event) => {
+      console.log('Sync event received:', event.data.type);
+      
+      // On recharge les données SQLite car elles ont été modifiées par un autre onglet
+      await initDatabase(); 
+      
+      if (selectedCondo) {
+        refreshCondoData(selectedCondo.id);
+      }
+      if (activeMeeting) {
+        refreshMeetingData(activeMeeting.id);
+      }
+      if (role === 'MANAGER') {
+        loadInitialData();
+      }
+    };
+    return () => syncChannel.close();
+  }, [selectedCondo, activeMeeting, role, refreshCondoData, refreshMeetingData, loadInitialData]);
+
   const startWithBrowserStorage = async () => {
     await initDatabase();
     setDbMode('browser');
@@ -134,7 +156,6 @@ const App: React.FC = () => {
     setLoginError(null);
   };
 
-  // Adding handlers for LeaderBoard and VoterBoard
   const handleSelectCondo = (condo: Condominium | null) => {
     setSelectedCondo(condo);
     setActiveMeeting(null);

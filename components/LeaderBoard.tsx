@@ -211,6 +211,12 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     ];
   };
 
+  const handleSelectCondoClick = (condo: Condominium) => {
+    // Reset activeTab to a valid one for the condo view
+    setActiveTab('coproprietaires');
+    onSelectCondo(condo);
+  };
+
   // --- Render Functions ---
 
   const renderConfirmationModal = () => {
@@ -260,7 +266,11 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
           <div className="flex space-x-2">
             <button 
               onClick={() => setActiveTab('schema')}
-              className="bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-300 transition-all"
+              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
+                activeTab === 'schema' 
+                ? 'bg-indigo-600 text-white' 
+                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+              }`}
             >
               Structure DB
             </button>
@@ -273,7 +283,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
           </div>
         </div>
 
-        {activeTab === 'schema' && (
+        {activeTab === 'schema' ? (
           <div className="animate-fade-in">
             <div className="flex items-center mb-4">
               <button onClick={() => setActiveTab('coproprietaires')} className="text-indigo-600 font-bold text-sm flex items-center hover:underline">
@@ -283,9 +293,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
             </div>
             <SchemaVisualizer />
           </div>
-        )}
-
-        {activeTab !== 'schema' && (
+        ) : (
           <>
             {showNewCondoForm && (
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg animate-slide-down">
@@ -317,7 +325,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
               {condominiums.map(condo => (
                 <button 
                   key={condo.id}
-                  onClick={() => onSelectCondo(condo)}
+                  onClick={() => handleSelectCondoClick(condo)}
                   className="bg-white p-6 rounded-2xl border border-slate-200 text-left hover:border-indigo-400 hover:shadow-md transition-all group"
                 >
                   <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
@@ -374,21 +382,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
         >
           Assemblées Générales
         </button>
-        <button
-          onClick={() => setActiveTab('schema')}
-          className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
-            activeTab === 'schema' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          Structure DB
-        </button>
       </div>
-
-      {activeTab === 'schema' && (
-        <div className="animate-fade-in">
-           <SchemaVisualizer />
-        </div>
-      )}
 
       {activeTab === 'coproprietaires' && (
         <div className="grid md:grid-cols-3 gap-6 animate-fade-in">

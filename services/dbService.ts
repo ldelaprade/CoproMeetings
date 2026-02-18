@@ -7,22 +7,26 @@ let fileHandle: FileSystemFileHandle | null = null;
 
 const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v5';
 
+// Canal de synchronisation pour simuler SSE en local (multi-onglets)
+const syncChannel = new BroadcastChannel('covote_sync');
+
+const broadcastChange = (type: string, payload?: any) => {
+  syncChannel.postMessage({ type, payload, timestamp: Date.now() });
+};
+
 /**
  * Initialise la base de données SQLite.
- * Utilise le binaire WASM avec locateFile pour pointer vers le CDN.
  */
 export const initDatabase = async (buffer?: Uint8Array) => {
   if (db && !buffer) return db;
 
   try {
-    // Récupération de la fonction d'initialisation depuis l'objet window
     const initSqlJsFunc = (window as any).initSqlJs;
     if (!initSqlJsFunc) {
       throw new Error("sql.js n'a pas été chargé correctement via le script tag.");
     }
 
     const SQL = await initSqlJsFunc({
-      // locateFile est crucial pour charger le .wasm depuis le même CDN
       locateFile: (file: string) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
     });
 
@@ -35,7 +39,6 @@ export const initDatabase = async (buffer?: Uint8Array) => {
           const uint8Array = new Uint8Array(JSON.parse(savedDb));
           db = new SQL.Database(uint8Array);
         } catch (e) {
-          console.warn("Échec du chargement de la base sauvegardée, création d'une nouvelle.");
           db = new SQL.Database();
           setupSchema();
           seedInitialData();
@@ -54,9 +57,6 @@ export const initDatabase = async (buffer?: Uint8Array) => {
   }
 };
 
-/**
- * Ouvre un sélecteur de fichier pour charger une base SQLite existante
- */
 export const openLocalDatabaseFile = async () => {
   try {
     const [handle] = await (window as any).showOpenFilePicker({
@@ -72,14 +72,10 @@ export const openLocalDatabaseFile = async () => {
     await initDatabase(buffer);
     return { name: file.name, handle };
   } catch (err) {
-    console.warn("User cancelled or failed to open file", err);
     return null;
   }
 };
 
-/**
- * Crée un nouveau fichier SQLite sur la machine locale
- */
 export const createLocalDatabaseFile = async () => {
   try {
     const handle = await (window as any).showSaveFilePicker({
@@ -90,13 +86,12 @@ export const createLocalDatabaseFile = async () => {
       }]
     });
     fileHandle = handle;
-    await initDatabase(); // Init empty
+    await initDatabase();
     setupSchema();
     seedInitialData();
-    await persistDatabase(); // Writes to file
+    await persistDatabase();
     return { name: 'copropriete.sqlite', handle };
   } catch (err) {
-    console.warn("User cancelled or failed to create file", err);
     return null;
   }
 };
@@ -104,19 +99,15 @@ export const createLocalDatabaseFile = async () => {
 export const persistDatabase = async () => {
   if (!db) return;
   const data = db.export();
-  
-  // 1. Toujours garder une copie de secours dans LocalStorage
   localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(Array.from(data)));
 
-  // 2. Si un fichier local est connecté, on synchronise
   if (fileHandle) {
     try {
       const writable = await (fileHandle as any).createWritable();
       await writable.write(data);
       await writable.close();
-      console.log("Database synced to local file");
     } catch (err) {
-      console.error("Failed to sync to local file. Permission might be revoked.", err);
+      console.error("Failed to sync to local file.", err);
     }
   }
 };
@@ -148,6 +139,18 @@ const seedInitialData = () => {
   db.run("INSERT OR IGNORE INTO roles (name) VALUES ('MANAGER'), ('VOTER')");
   db.run("INSERT OR IGNORE INTO condominiums (id, name, address) VALUES (1, 'Résidence Les Pins', '123 Avenue du Soleil, 75001 Paris')");
   db.run("INSERT OR IGNORE INTO logins (name, email, password, condominium_id, role_id) VALUES ('Administrateur', 'Admin', 'admin123', 1, 1)");
+  
+  const exampleVoters = [
+    ['Jean Dupont', 'jean@mail.com', '1234'],
+    ['Marie Curie', 'marie@mail.com', '1234'],
+    ['Pierre Martin', 'pierre@mail.com', '1234'],
+    ['Sophie Bernard', 'sophie@mail.com', '1234'],
+    ['Thomas Petit', 'thomas@mail.com', '1234']
+  ];
+  
+  exampleVoters.forEach(v => {
+    db.run("INSERT OR IGNORE INTO logins (name, email, password, condominium_id, role_id) VALUES (?, ?, ?, 1, 2)", v);
+  });
 };
 
 export const getDatabaseSchema = () => {
@@ -193,6 +196,7 @@ export const createCondominium = (name: string, address: string) => {
   if (!db) return;
   db.run("INSERT INTO condominiums (name, address) VALUES (?, ?)", [name, address]);
   persistDatabase();
+  broadcastChange('DATA_CHANGED');
 };
 
 export const queryLogin = (email: string, password: string) => {
@@ -230,6 +234,7 @@ export const createMeeting = (condoId: number, title: string, date: string) => {
   if (!db) return;
   db.run("INSERT INTO general_meetings (condominium_id, title, date) VALUES (?, ?, ?)", [condoId, title, date]);
   persistDatabase();
+  broadcastChange('DATA_CHANGED');
 };
 
 export const saveResolution = (res: any) => {
@@ -239,12 +244,14 @@ export const saveResolution = (res: any) => {
     VALUES (?, ?, ?, ?, ?)
   `, [res.id, res.meetingId, res.title, res.description, res.status]);
   persistDatabase();
+  broadcastChange('DATA_CHANGED');
 };
 
 export const updateResStatus = (id: string, status: string) => {
   if (!db) return;
   db.run("UPDATE resolutions SET status = ? WHERE id = ?", [status, id]);
   persistDatabase();
+  broadcastChange('RESOLUTION_STATUS_CHANGED', { id, status });
 };
 
 export const getAllResolutions = (meetingId: number) => {
@@ -272,6 +279,7 @@ export const registerVote = (resId: string, voterId: number, option: string) => 
     VALUES (?, ?, ?, ?)
   `, [resId, voterId, option, Date.now()]);
   persistDatabase();
+  broadcastChange('VOTE_REGISTERED', { resId, voterId });
 };
 
 export const getCondominium = (id: number) => {
@@ -291,12 +299,14 @@ export const createVoter = (name: string, email: string, password: string = '123
     VALUES (?, ?, ?, ?, 2)
   `, [name, email, password, condoId]);
   persistDatabase();
+  broadcastChange('DATA_CHANGED');
 };
 
 export const updateVoter = (id: string, name: string, email: string) => {
   if (!db) return;
   db.run("UPDATE logins SET name = ?, email = ? WHERE id = ?", [name, email, id]);
   persistDatabase();
+  broadcastChange('DATA_CHANGED');
 };
 
 export const getVoters = (condoId: number) => {
