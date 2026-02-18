@@ -1,14 +1,18 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Participant, Resolution, RoleType, ResolutionStatus, VoteOption, Condominium, UserLogin, GeneralMeeting } from './types';
-import Layout from './components/Layout';
-import LeaderBoard from './components/LeaderBoard';
-import VoterBoard from './components/VoterBoard';
+import { Participant, Resolution, RoleType, ResolutionStatus, VoteOption, Condominium, UserLogin, GeneralMeeting } from './types.ts';
+import Layout from './components/Layout.tsx';
+import LeaderBoard from './components/LeaderBoard.tsx';
+import VoterBoard from './components/VoterBoard.tsx';
 import { 
   initDatabase, 
   queryLogin, 
+  getUserCondominiums,
   createVoter, 
   updateVoter,
+  toggleVoterStatus,
+  hasVoterVotedInCondo,
+  deleteVoterMembershipPermanently,
   getVoters, 
   getCondominium,
   getCondominiums,
@@ -22,7 +26,7 @@ import {
   registerVote,
   openLocalDatabaseFile,
   createLocalDatabaseFile
-} from './services/dbService';
+} from './services/dbService.ts';
 
 const App: React.FC = () => {
   const [dbReady, setDbReady] = useState(false);
@@ -41,6 +45,8 @@ const App: React.FC = () => {
   const [resolutions, setResolutions] = useState<Resolution[]>([]);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
 
+  const [voterCondos, setVoterCondos] = useState<Condominium[]>([]);
+
   const loadInitialData = useCallback(() => {
     if (role === 'MANAGER') {
       const allCondos = getCondominiums();
@@ -55,7 +61,8 @@ const App: React.FC = () => {
     setParticipants(voters.map((v: any) => ({
       id: v.id.toString(),
       name: v.name,
-      email: v.email
+      email: v.email,
+      isActive: v.isActive
     })));
     const condoMeetings = getMeetings(condoId);
     setMeetings(condoMeetings as any);
@@ -66,13 +73,9 @@ const App: React.FC = () => {
     setResolutions(resFromDb as any);
   }, []);
 
-  // Écoute des événements de synchronisation temps réel (Simulateur SSE)
   useEffect(() => {
     const syncChannel = new BroadcastChannel('covote_sync');
     syncChannel.onmessage = async (event) => {
-      console.log('Sync event received:', event.data.type);
-      
-      // On recharge les données SQLite car elles ont été modifiées par un autre onglet
       await initDatabase(); 
       
       if (selectedCondo) {
@@ -128,19 +131,17 @@ const App: React.FC = () => {
         id: user.id,
         name: user.name,
         email: user.email,
-        condominiumId: user.condominium_id,
-        role: user.role as RoleType
+        role: user.role as RoleType,
+        isActive: user.isActive
       });
+
       if (user.role === 'VOTER') {
-        const condo = getCondominium(user.condominium_id);
-        setSelectedCondo(condo as any);
-        const condoMeetings = getMeetings(user.condominium_id);
-        if (condoMeetings.length > 0) {
-          const lastMeeting = condoMeetings[0];
-          setActiveMeeting(lastMeeting as any);
-          const resFromDb = getAllResolutions(lastMeeting.id);
-          setResolutions(resFromDb as any);
+        const condos = getUserCondominiums(user.id);
+        if (condos.length === 0) {
+          setLoginError("Vous n'êtes rattaché à aucune copropriété active.");
+          return;
         }
+        setVoterCondos(condos as any);
       }
     } else {
       setLoginError("Identifiants ou mot de passe incorrects.");
@@ -153,15 +154,33 @@ const App: React.FC = () => {
     setSelectedCondo(null);
     setActiveMeeting(null);
     setMeetings([]);
+    setVoterCondos([]);
+    setResolutions([]);
     setLoginForm({ email: '', password: '' });
     setLoginError(null);
   };
 
   const handleSelectCondo = (condo: Condominium | null) => {
+    // Crucial : On réinitialise l'AG et les résolutions dès qu'on change de copropriété
     setSelectedCondo(condo);
     setActiveMeeting(null);
+    setResolutions([]);
+    
     if (condo) {
       refreshCondoData(condo.id);
+      if (role === 'VOTER') {
+        const condoMeetings = getMeetings(condo.id);
+        if (condoMeetings.length > 0) {
+          const lastMeeting = condoMeetings[0];
+          setActiveMeeting(lastMeeting as any);
+          const resFromDb = getAllResolutions(lastMeeting.id);
+          setResolutions(resFromDb as any);
+        } else {
+          // Si aucune AG, on s'assure que l'état est vide
+          setActiveMeeting(null);
+          setResolutions([]);
+        }
+      }
     }
   };
 
@@ -174,6 +193,8 @@ const App: React.FC = () => {
     setActiveMeeting(meeting);
     if (meeting) {
       refreshMeetingData(meeting.id);
+    } else {
+      setResolutions([]);
     }
   };
 
@@ -195,6 +216,32 @@ const App: React.FC = () => {
     if (selectedCondo) {
       updateVoter(p.id, p.name, p.email);
       refreshCondoData(selectedCondo.id);
+    }
+  };
+
+  const handleToggleParticipantStatus = (id: string, active: boolean) => {
+    if (selectedCondo) {
+      toggleVoterStatus(id, selectedCondo.id, active);
+      refreshCondoData(selectedCondo.id);
+    }
+  };
+
+  const handleDeleteParticipant = (id: string): { success: boolean, mode: 'deleted' | 'deactivated', name: string } => {
+    if (!selectedCondo) return { success: false, mode: 'deleted', name: '' };
+    
+    const voterId = parseInt(id);
+    const hasVotes = hasVoterVotedInCondo(voterId, selectedCondo.id);
+    const voter = participants.find(p => p.id === id);
+    const voterName = voter?.name || "Inconnu";
+
+    if (hasVotes) {
+      toggleVoterStatus(id, selectedCondo.id, false);
+      refreshCondoData(selectedCondo.id);
+      return { success: true, mode: 'deactivated', name: voterName };
+    } else {
+      deleteVoterMembershipPermanently(id, selectedCondo.id);
+      refreshCondoData(selectedCondo.id);
+      return { success: true, mode: 'deleted', name: voterName };
     }
   };
 
@@ -337,6 +384,47 @@ const App: React.FC = () => {
     );
   }
 
+  // Écran de sélection de copropriété pour les votants après connexion
+  if (role === 'VOTER' && !selectedCondo) {
+    return (
+      <Layout user={currentUser?.name} role="VOTER" onLogout={logout}>
+        <div className="max-w-4xl mx-auto animate-fade-in">
+          <div className="mb-10 text-center">
+            <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Bienvenue, {currentUser?.name}</h2>
+            <p className="text-slate-500">Sélectionnez la copropriété pour laquelle vous souhaitez voter aujourd'hui.</p>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {voterCondos.map(condo => (
+              <button 
+                key={condo.id} 
+                onClick={() => handleSelectCondo(condo)}
+                className="bg-white p-8 rounded-3xl border border-slate-200 text-left hover:border-indigo-400 hover:shadow-xl transition-all group relative overflow-hidden"
+              >
+                <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-bl-full -mr-16 -mt-16 group-hover:bg-indigo-100 transition-colors"></div>
+                <div className="relative z-10">
+                  <div className="w-14 h-14 bg-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-indigo-600 group-hover:text-white transition-all">
+                    <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                  </div>
+                  <h3 className="font-bold text-slate-800 text-xl mb-2">{condo.name}</h3>
+                  <p className="text-sm text-slate-500 leading-relaxed">{condo.address}</p>
+                  <div className="mt-8 flex items-center text-indigo-600 font-bold text-sm uppercase tracking-wider group-hover:translate-x-1 transition-transform">
+                    Accéder à l'espace de vote
+                    <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                    </svg>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
   return (
     <Layout user={currentUser?.name} role={role === 'MANAGER' ? 'LEADER' : 'VOTER'} onLogout={logout}>
       {role === 'MANAGER' ? (
@@ -356,13 +444,26 @@ const App: React.FC = () => {
           onAddResolution={handleAddResolution}
           onUpdateResolutionStatus={handleUpdateStatus}
           onDeleteResolution={handleDeleteResolution}
+          onToggleParticipantStatus={handleToggleParticipantStatus}
+          onDeleteParticipant={handleDeleteParticipant}
         />
       ) : (
-        currentUser && (
+        currentUser && selectedCondo && (
           <div className="space-y-6">
-             <div className="mb-6">
-              <h2 className="text-2xl font-bold text-slate-800">{selectedCondo?.name}</h2>
-              <p className="text-slate-500 text-sm">{selectedCondo?.address}</p>
+             <div className="mb-6 flex justify-between items-end bg-white p-6 rounded-2xl border border-slate-200 shadow-sm animate-fade-in">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-800">{selectedCondo.name}</h2>
+                <p className="text-slate-500 text-sm">{selectedCondo.address}</p>
+              </div>
+              <button 
+                onClick={() => setSelectedCondo(null)}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center"
+              >
+                <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
+                </svg>
+                Changer de copropriété
+              </button>
             </div>
             <VoterBoard 
               resolutions={resolutions}

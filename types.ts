@@ -18,6 +18,7 @@ export interface Participant {
   name: string;
   email: string;
   password?: string;
+  isActive: boolean;
 }
 
 export interface Condominium {
@@ -32,8 +33,9 @@ export interface UserLogin {
   name: string;
   email: string;
   password?: string;
-  condominiumId: number;
+  condominiumId?: number; // Optionnel tant qu'une session n'est pas choisie
   role: RoleType;
+  isActive: boolean;
 }
 
 export interface GeneralMeeting {

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Participant, Resolution, ResolutionStatus, VoteOption, Condominium, GeneralMeeting } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { refineResolution } from '../services/geminiService';
+import { findUserByEmail } from '../services/dbService';
 import SchemaVisualizer from './SchemaVisualizer';
 
 interface LeaderBoardProps {
@@ -21,6 +22,8 @@ interface LeaderBoardProps {
   onAddResolution: (r: Resolution) => void;
   onUpdateResolutionStatus: (id: string, status: ResolutionStatus) => void;
   onDeleteResolution: (id: string) => void;
+  onToggleParticipantStatus?: (id: string, active: boolean) => void;
+  onDeleteParticipant?: (id: string) => { success: boolean, mode: 'deleted' | 'deactivated', name: string };
 }
 
 const LeaderBoard: React.FC<LeaderBoardProps> = ({ 
@@ -38,7 +41,9 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   onUpdateParticipant,
   onAddResolution,
   onUpdateResolutionStatus,
-  onDeleteResolution
+  onDeleteResolution,
+  onToggleParticipantStatus,
+  onDeleteParticipant
 }) => {
   const [activeTab, setActiveTab] = useState<'coproprietaires' | 'meetings' | 'schema'>('coproprietaires');
   const [meetingTab, setMeetingTab] = useState<'resolutions' | 'results'>('resolutions');
@@ -50,12 +55,16 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     onConfirm: () => void;
   } | null>(null);
 
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [voterFormError, setVoterFormError] = useState<string | null>(null);
+
   const [showNewCondoForm, setShowNewCondoForm] = useState(false);
   const [newCondo, setNewCondo] = useState({ name: '', address: '' });
   const [showNewMeetingForm, setShowNewMeetingForm] = useState(false);
   const [newMeeting, setNewMeeting] = useState({ title: '', date: new Date().toISOString().split('T')[0] });
 
   const [newVoter, setNewVoter] = useState({ id: '', name: '', email: '', password: '' });
+  const [isExistingAccount, setIsExistingAccount] = useState(false);
   const [editingVoterId, setEditingVoterId] = useState<string | null>(null);
   
   const [newTitle, setNewTitle] = useState('');
@@ -77,25 +86,83 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     setShowNewMeetingForm(false);
   };
 
+  const validateEmail = (email: string) => {
+    return String(email)
+      .toLowerCase()
+      .match(
+        /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
+      );
+  };
+
+  const handleEmailChange = (email: string) => {
+    setNewVoter(prev => ({ ...prev, email }));
+    setVoterFormError(null);
+
+    // Si on est en train d'éditer, on ne fait pas la vérification d'existence temps réel (conflit potentiel)
+    if (editingVoterId) return;
+
+    if (validateEmail(email)) {
+      const user = findUserByEmail(email);
+      if (user) {
+        setNewVoter(prev => ({ ...prev, name: user.name, password: '' }));
+        setIsExistingAccount(true);
+      } else {
+        setIsExistingAccount(false);
+        // Si on change l'email et que ce n'est plus un existant, on vide le nom si c'était celui d'un existant
+        if (isExistingAccount) {
+          setNewVoter(prev => ({ ...prev, name: '' }));
+        }
+      }
+    } else {
+      setIsExistingAccount(false);
+    }
+  };
+
   const handleVoterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingVoterId) {
-      onUpdateParticipant({ id: editingVoterId, name: newVoter.name, email: newVoter.email });
-      setEditingVoterId(null);
-    } else {
-      onAddParticipant({
-        id: Math.random().toString(36).substr(2, 9),
-        name: newVoter.name,
-        email: newVoter.email,
-        password: newVoter.password
-      });
+    setVoterFormError(null);
+    try {
+      if (editingVoterId) {
+        onUpdateParticipant({ id: editingVoterId, name: newVoter.name, email: newVoter.email, isActive: true });
+        setEditingVoterId(null);
+      } else {
+        onAddParticipant({
+          id: Math.random().toString(36).substr(2, 9),
+          name: newVoter.name,
+          email: newVoter.email,
+          password: newVoter.password || '1234', // '1234' par défaut pour les existants
+          isActive: true
+        });
+      }
+      setNewVoter({ id: '', name: '', email: '', password: '' });
+      setIsExistingAccount(false);
+    } catch (error: any) {
+      setVoterFormError(error.message || "Une erreur est survenue lors de l'enregistrement.");
     }
-    setNewVoter({ id: '', name: '', email: '', password: '' });
   };
 
   const startEditingVoter = (p: Participant) => {
     setEditingVoterId(p.id);
+    setVoterFormError(null);
+    setIsExistingAccount(false);
     setNewVoter({ id: p.id, name: p.name, email: p.email, password: '' });
+  };
+
+  const handleDeleteVoterClick = (p: Participant) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: "Confirmer la suppression",
+      message: `Voulez-vous vraiment supprimer "${p.name}" ? Si ce votant a déjà déposé des bulletins, il sera seulement marqué comme périmé pour préserver l'historique des PV.`,
+      onConfirm: () => {
+        if (onDeleteParticipant) {
+          const result = onDeleteParticipant(p.id);
+          if (result.mode === 'deactivated') {
+            setInfoMessage(`Le Votant ${result.name} a des votes à son actif et ne peut pas être détruit. Il a été passé en statut 'Périmé'.`);
+          }
+        }
+        setConfirmDialog(null);
+      }
+    });
   };
 
   const handleDraftResolution = async () => {
@@ -127,12 +194,12 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
 
   const handleCloseVote = (res: Resolution) => {
     const votedCount = res.votes.length;
-    const totalVoters = participants.length;
+    const totalVoters = participants.filter(p => p.isActive).length;
     let message = "";
     if (votedCount === 0) {
       message = "Attention : aucun vote n'a été enregistré. Voulez-vous vraiment clôturer ?";
     } else if (votedCount < totalVoters) {
-      message = `${votedCount}/${totalVoters} participants ont voté. Clôturer le scrutin ?`;
+      message = `${votedCount}/${totalVoters} participants actifs ont voté. Clôturer le scrutin ?`;
     }
 
     if (message) {
@@ -150,7 +217,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     }
   };
 
-  const handleDeleteConfirm = (res: Resolution) => {
+  const handleDeleteResConfirm = (res: Resolution) => {
     setConfirmDialog({
       isOpen: true,
       title: "Retirer la résolution",
@@ -278,7 +345,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {condominiums.map(condo => (
             <button key={condo.id} onClick={() => onSelectCondo(condo)} className="bg-white p-6 rounded-2xl border border-slate-200 text-left hover:border-indigo-400 hover:shadow-md transition-all group">
-              <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg></div>
+              <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2-2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg></div>
               <h3 className="font-bold text-slate-800 text-lg mb-1">{condo.name}</h3>
               <p className="text-sm text-slate-500">{condo.address}</p>
             </button>
@@ -293,6 +360,15 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   return (
     <div className="space-y-6">
       {renderConfirmationModal()}
+      
+      {infoMessage && (
+        <div className="fixed top-20 right-4 z-50 max-w-sm bg-indigo-600 text-white p-4 rounded-xl shadow-2xl animate-slide-in flex items-start">
+          <svg className="w-5 h-5 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <div className="text-sm font-medium">{infoMessage}</div>
+          <button onClick={() => setInfoMessage(null)} className="ml-4 hover:opacity-70"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg></button>
+        </div>
+      )}
+
       <div className="flex items-center space-x-4 mb-4">
         <button onClick={() => onSelectCondo(null)} className="p-2 hover:bg-slate-200 rounded-lg"><svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg></button>
         <div><h2 className="text-2xl font-bold text-slate-800">{selectedCondo.name}</h2><p className="text-sm text-slate-500">{selectedCondo.address}</p></div>
@@ -307,13 +383,59 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
         <div className="grid md:grid-cols-3 gap-6 animate-fade-in">
           <div className="md:col-span-1 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-fit">
             <h3 className="text-lg font-bold mb-4">{editingVoterId ? 'Modifier Votant' : 'Nouveau Votant'}</h3>
+            
+            {voterFormError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-700 text-xs rounded-lg flex items-center">
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                {voterFormError}
+              </div>
+            )}
+
             <form onSubmit={handleVoterSubmit} className="space-y-4">
-              <input placeholder="Nom complet" className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newVoter.name} onChange={e => setNewVoter({...newVoter, name: e.target.value})} required />
-              <input type="email" placeholder="Email" className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newVoter.email} onChange={e => setNewVoter({...newVoter, email: e.target.value})} required />
-              {!editingVoterId && <input type="password" placeholder="Mot de passe" className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newVoter.password} onChange={e => setNewVoter({...newVoter, password: e.target.value})} required />}
-              <div className="flex gap-2">
-                <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold">{editingVoterId ? 'Mettre à jour' : 'Ajouter'}</button>
-                {editingVoterId && <button type="button" onClick={() => setEditingVoterId(null)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg">Annuler</button>}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Email</label>
+                <input 
+                  type="email" 
+                  placeholder="votre@mail.com" 
+                  className={`w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500 transition-all ${isExistingAccount ? 'border-indigo-300 ring-indigo-50 bg-indigo-50/20' : ''}`} 
+                  value={newVoter.email} 
+                  onChange={e => handleEmailChange(e.target.value)} 
+                  required 
+                />
+                {isExistingAccount && <p className="text-[10px] text-indigo-600 font-bold mt-1">✓ Utilisateur trouvé en base</p>}
+              </div>
+              
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Nom complet</label>
+                <input 
+                  placeholder="Prénom Nom" 
+                  className={`w-full px-4 py-2 border rounded-lg outline-none focus:ring-2 ring-indigo-500 transition-all ${isExistingAccount ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed' : 'bg-slate-50 border-slate-200'}`} 
+                  value={newVoter.name} 
+                  onChange={e => setNewVoter({...newVoter, name: e.target.value})} 
+                  readOnly={isExistingAccount}
+                  required 
+                />
+              </div>
+
+              {(!isExistingAccount && !editingVoterId) && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Mot de passe provisoire</label>
+                  <input 
+                    type="password" 
+                    placeholder="••••••••" 
+                    className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 ring-indigo-500" 
+                    value={newVoter.password} 
+                    onChange={e => setNewVoter({...newVoter, password: e.target.value})} 
+                    required 
+                  />
+                </div>
+              )}
+              
+              <div className="flex gap-2 pt-2">
+                <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all">
+                  {editingVoterId ? 'Mettre à jour' : isExistingAccount ? 'Ajouter à la copropriété' : 'Créer & Ajouter'}
+                </button>
+                {editingVoterId && <button type="button" onClick={() => { setEditingVoterId(null); setVoterFormError(null); }} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg font-bold">Annuler</button>}
               </div>
             </form>
           </div>
@@ -321,10 +443,30 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
             <table className="w-full text-left">
               <thead className="bg-slate-50 border-b"><tr className="text-xs font-bold text-slate-500 uppercase"><th className="px-6 py-4">Nom</th><th className="px-6 py-4">Email</th><th className="px-6 py-4 text-right">Action</th></tr></thead>
               <tbody className="divide-y">{participants.map(p => (
-                <tr key={p.id} className="hover:bg-slate-50 transition-colors group">
-                  <td className="px-6 py-4 font-medium">{p.name}</td>
+                <tr key={p.id} className={`hover:bg-slate-50 transition-colors group ${!p.isActive ? 'opacity-50 grayscale bg-slate-50' : ''}`}>
+                  <td className="px-6 py-4 font-medium">
+                    {p.name}
+                    {!p.isActive && <span className="ml-2 text-[8px] font-bold uppercase bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded">Périmé</span>}
+                  </td>
                   <td className="px-6 py-4 text-slate-600">{p.email}</td>
-                  <td className="px-6 py-4 text-right"><button onClick={() => startEditingVoter(p)} className="text-indigo-600 font-bold text-xs opacity-0 group-hover:opacity-100 transition-all uppercase">Modifier</button></td>
+                  <td className="px-6 py-4 text-right space-x-3">
+                    <button onClick={() => startEditingVoter(p)} className="text-indigo-600 font-bold text-xs opacity-0 group-hover:opacity-100 transition-all uppercase">Modifier</button>
+                    {p.isActive ? (
+                      <button 
+                        onClick={() => handleDeleteVoterClick(p)} 
+                        className="text-red-500 font-bold text-xs opacity-0 group-hover:opacity-100 transition-all uppercase"
+                      >
+                        Supprimer
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => onToggleParticipantStatus?.(p.id, true)} 
+                        className="text-green-600 font-bold text-xs opacity-0 group-hover:opacity-100 transition-all uppercase"
+                      >
+                        Réactiver
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}</tbody>
             </table>
@@ -407,7 +549,8 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
 
                   <div className="grid gap-4">
                     {resolutions.map(res => {
-                      const participationPercent = participants.length > 0 ? Math.round((res.votes.length / participants.length) * 100) : 0;
+                      const activeParticipantsCount = participants.filter(p => p.isActive).length;
+                      const participationPercent = activeParticipantsCount > 0 ? Math.round((res.votes.length / activeParticipantsCount) * 100) : 0;
                       return (
                         <div key={res.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center group transition-all hover:border-indigo-200 relative overflow-hidden">
                           <div className="w-1/4 pr-4 border-r border-slate-100">
@@ -418,9 +561,9 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                           </div>
 
                           <div className="flex-grow px-10 flex flex-col justify-center">
-                            <div className="flex items-center justify-between mb-1.5 px-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Participation</span><span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 rounded-full">{participationPercent}%</span></div>
+                            <div className="flex items-center justify-between mb-1.5 px-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Participation Actifs</span><span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 rounded-full">{participationPercent}%</span></div>
                             <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50 shadow-inner">
-                              <div className={`h-full transition-all duration-1000 ease-out relative ${res.status === ResolutionStatus.ACTIVE ? 'bg-indigo-600 animate-pulse-subtle' : 'bg-slate-300'}`} style={{ width: `${participationPercent}%` }}>
+                              <div className={`h-full transition-all duration-1000 ease-out relative ${res.status === ResolutionStatus.ACTIVE ? 'bg-indigo-600 animate-pulse-subtle' : 'bg-slate-300'}`} style={{ width: `${Math.min(100, participationPercent)}%` }}>
                                 {res.status === ResolutionStatus.ACTIVE && <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }}></div>}
                               </div>
                             </div>
@@ -430,7 +573,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                             {res.status === ResolutionStatus.PENDING && <button onClick={() => onUpdateResolutionStatus(res.id, ResolutionStatus.ACTIVE)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-green-700 transition-all shadow-sm">Ouvrir</button>}
                             {res.status === ResolutionStatus.ACTIVE && <button onClick={() => handleCloseVote(res)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-700 transition-all shadow-sm">Clôturer</button>}
                             {res.status === ResolutionStatus.CLOSED && getResolutionResultBadge(res)}
-                            <button onClick={() => handleDeleteConfirm(res)} className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all" title="Retirer"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                            <button onClick={() => handleDeleteResConfirm(res)} className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all" title="Retirer"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                           </div>
                         </div>
                       );
@@ -454,7 +597,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {selectedResObj.votes.map((v, idx) => {
                                 const participant = participants.find(p => p.id === v.voterId.toString());
-                                return (<div key={idx} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg text-xs border border-slate-100"><span className="font-semibold text-slate-700">{participant?.name || 'Inconnu'}</span><span className={`font-extrabold uppercase px-2 py-0.5 rounded text-[9px] ${v.option === VoteOption.YES ? 'bg-green-100 text-green-700' : v.option === VoteOption.NO ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{v.option}</span></div>);
+                                return (<div key={idx} className={`flex justify-between items-center p-3 bg-slate-50 rounded-lg text-xs border border-slate-100 ${participant && !participant.isActive ? 'opacity-50' : ''}`}><span className="font-semibold text-slate-700">{participant?.name || 'Inconnu'} {participant && !participant.isActive && '(Départ)'}</span><span className={`font-extrabold uppercase px-2 py-0.5 rounded text-[9px] ${v.option === VoteOption.YES ? 'bg-green-100 text-green-700' : v.option === VoteOption.NO ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{v.option}</span></div>);
                               })}
                            </div>
                         </div>
@@ -471,8 +614,10 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
       <style>{`
         @keyframes pulse-subtle { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
         @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
         .animate-pulse-subtle { animation: pulse-subtle 2s infinite ease-in-out; }
         .animate-shimmer { animation: shimmer 3s infinite linear; }
+        .animate-slide-in { animation: slideIn 0.3s ease-out; }
       `}</style>
     </div>
   );
