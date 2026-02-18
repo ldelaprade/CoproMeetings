@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Participant, Resolution, ResolutionStatus, VoteOption, Condominium, GeneralMeeting } from '../types';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { refineResolution } from '../services/geminiService';
 import SchemaVisualizer from './SchemaVisualizer';
 
@@ -20,6 +20,7 @@ interface LeaderBoardProps {
   onUpdateParticipant: (p: Participant) => void;
   onAddResolution: (r: Resolution) => void;
   onUpdateResolutionStatus: (id: string, status: ResolutionStatus) => void;
+  onDeleteResolution: (id: string) => void;
 }
 
 const LeaderBoard: React.FC<LeaderBoardProps> = ({ 
@@ -36,12 +37,12 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   onAddParticipant, 
   onUpdateParticipant,
   onAddResolution,
-  onUpdateResolutionStatus 
+  onUpdateResolutionStatus,
+  onDeleteResolution
 }) => {
   const [activeTab, setActiveTab] = useState<'coproprietaires' | 'meetings' | 'schema'>('coproprietaires');
   const [meetingTab, setMeetingTab] = useState<'resolutions' | 'results'>('resolutions');
   
-  // Custom Confirmation Modal State
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -49,24 +50,19 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     onConfirm: () => void;
   } | null>(null);
 
-  // Forms
   const [showNewCondoForm, setShowNewCondoForm] = useState(false);
   const [newCondo, setNewCondo] = useState({ name: '', address: '' });
-  
   const [showNewMeetingForm, setShowNewMeetingForm] = useState(false);
   const [newMeeting, setNewMeeting] = useState({ title: '', date: new Date().toISOString().split('T')[0] });
 
-  // Voter management
   const [newVoter, setNewVoter] = useState({ id: '', name: '', email: '', password: '' });
   const [editingVoterId, setEditingVoterId] = useState<string | null>(null);
   
-  // Resolution Draft
   const [newTitle, setNewTitle] = useState('');
   const [newRes, setNewRes] = useState('');
   const [loadingAI, setLoadingAI] = useState(false);
   const [selectedResultRes, setSelectedResultRes] = useState<string | null>(null);
 
-  // --- Handlers ---
   const handleCreateCondoSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onCreateCondo(newCondo.name, newCondo.address);
@@ -84,11 +80,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   const handleVoterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingVoterId) {
-      onUpdateParticipant({
-        id: editingVoterId,
-        name: newVoter.name,
-        email: newVoter.email
-      });
+      onUpdateParticipant({ id: editingVoterId, name: newVoter.name, email: newVoter.email });
       setEditingVoterId(null);
     } else {
       onAddParticipant({
@@ -106,11 +98,6 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     setNewVoter({ id: p.id, name: p.name, email: p.email, password: '' });
   };
 
-  const cancelVoterEdit = () => {
-    setEditingVoterId(null);
-    setNewVoter({ id: '', name: '', email: '', password: '' });
-  };
-
   const handleDraftResolution = async () => {
     if (!newRes) return;
     setLoadingAI(true);
@@ -120,7 +107,6 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
       setNewRes(refined.description);
     } catch (error) {
       console.error("AI Error", error);
-      alert("L'IA n'a pas pu formuler la résolution.");
     } finally {
       setLoadingAI(false);
     }
@@ -142,12 +128,11 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   const handleCloseVote = (res: Resolution) => {
     const votedCount = res.votes.length;
     const totalVoters = participants.length;
-    
     let message = "";
     if (votedCount === 0) {
-      message = "Attention : aucun vote n'a été enregistré pour cette résolution. Voulez-vous vraiment clôturer le scrutin maintenant ?";
+      message = "Attention : aucun vote n'a été enregistré. Voulez-vous vraiment clôturer ?";
     } else if (votedCount < totalVoters) {
-      message = `${votedCount} copropriétaires ont voté sur ${totalVoters} inscrits. Voulez-vous vraiment clôturer ce vote alors qu'il manque des participants ?`;
+      message = `${votedCount}/${totalVoters} participants ont voté. Clôturer le scrutin ?`;
     }
 
     if (message) {
@@ -161,298 +146,187 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
         }
       });
     } else {
-      // Clôture directe si tout le monde a voté
       onUpdateResolutionStatus(res.id, ResolutionStatus.CLOSED);
     }
   };
 
-  const getResolutionResultBadge = (res: Resolution) => {
-    if (res.status !== ResolutionStatus.CLOSED) return null;
-    
-    const forVotes = res.votes.filter(v => v.option === VoteOption.YES).length;
-    const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
-    
-    if (forVotes === 0 && againstVotes === 0) {
-      return (
-        <span className="bg-slate-100 text-slate-500 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-slate-200">
-          Aucun vote
-        </span>
-      );
-    }
-
-    if (forVotes > againstVotes) {
-      return (
-        <span className="bg-green-100 text-green-800 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-green-200">
-          Adopté
-        </span>
-      );
-    } else if (againstVotes > forVotes) {
-      return (
-        <span className="bg-red-100 text-red-800 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-red-200">
-          Rejeté
-        </span>
-      );
-    } else {
-      return (
-        <span className="bg-amber-100 text-amber-800 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider border border-amber-200">
-          Égalité
-        </span>
-      );
-    }
+  const handleDeleteConfirm = (res: Resolution) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: "Retirer la résolution",
+      message: `Voulez-vous supprimer définitivement "${res.title}" ?`,
+      onConfirm: () => {
+        onDeleteResolution(res.id);
+        setConfirmDialog(null);
+      }
+    });
   };
 
-  const getVoteData = (resolution: Resolution) => {
-    const counts = { [VoteOption.YES]: 0, [VoteOption.NO]: 0, [VoteOption.ABSTAIN]: 0 };
-    resolution.votes.forEach(v => counts[v.option]++);
+  const handleExportCSV = () => {
+    if (!activeMeeting || resolutions.length === 0) return;
+
+    // Colonnes du CSV
+    const headers = ["Résolution", "Statut", "Description", "Copropriétaire", "Vote", "Date"];
+    
+    // Construction des lignes
+    const rows = resolutions.flatMap(res => {
+      if (res.votes.length === 0) {
+        return [[
+          res.title,
+          res.status === ResolutionStatus.CLOSED ? "Clos" : "Ouvert",
+          res.description.replace(/(\r\n|\n|\r)/gm, " "),
+          "N/A",
+          "Aucun vote",
+          ""
+        ]];
+      }
+      
+      return res.votes.map(v => {
+        const p = participants.find(part => part.id === v.voterId.toString());
+        return [
+          res.title,
+          res.status === ResolutionStatus.CLOSED ? "Clos" : "Ouvert",
+          res.description.replace(/(\r\n|\n|\r)/gm, " "),
+          p ? p.name : "Inconnu",
+          v.option,
+          new Date(v.timestamp).toLocaleString('fr-FR')
+        ];
+      });
+    });
+
+    // Génération du contenu CSV (séparateur point-virgule pour Excel FR)
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(";"))
+      .join("\n");
+
+    // Ajout d'un BOM UTF-8 pour Excel
+    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `PV_AG_${activeMeeting.title.replace(/\s+/g, '_')}_${new Date().toLocaleDateString('fr-FR').replace(/\//g, '-')}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const getResolutionResultBadge = (res: Resolution) => {
+    if (res.status !== ResolutionStatus.CLOSED) return null;
+    const forVotes = res.votes.filter(v => v.option === VoteOption.YES).length;
+    const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
+    if (forVotes === 0 && againstVotes === 0) return <span className="bg-slate-100 text-slate-500 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border">Néant</span>;
+    if (forVotes > againstVotes) return <span className="bg-green-100 text-green-800 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-green-200">Adopté</span>;
+    if (againstVotes > forVotes) return <span className="bg-red-100 text-red-800 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-red-200">Rejeté</span>;
+    return <span className="bg-amber-100 text-amber-800 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase border border-amber-200">Égalité</span>;
+  };
+
+  const getVoteData = (res: Resolution) => {
+    const yes = res.votes.filter(v => v.option === VoteOption.YES).length;
+    const no = res.votes.filter(v => v.option === VoteOption.NO).length;
+    const abstain = res.votes.filter(v => v.option === VoteOption.ABSTAIN).length;
+
     return [
-      { name: 'POUR', value: counts[VoteOption.YES], color: '#10b981' },
-      { name: 'CONTRE', value: counts[VoteOption.NO], color: '#ef4444' },
-      { name: 'ABSTENTION', value: counts[VoteOption.ABSTAIN], color: '#94a3b8' },
+      { name: 'POUR', value: yes, color: '#10b981' },
+      { name: 'CONTRE', value: no, color: '#ef4444' },
+      { name: 'ABSTENTION', value: abstain, color: '#94a3b8' }
     ];
   };
 
-  const handleSelectCondoClick = (condo: Condominium) => {
-    // Reset activeTab to a valid one for the condo view
-    setActiveTab('coproprietaires');
-    onSelectCondo(condo);
-  };
-
-  // --- Render Functions ---
-
   const renderConfirmationModal = () => {
     if (!confirmDialog || !confirmDialog.isOpen) return null;
-
     return (
       <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-scale-up border border-slate-100">
-          <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-6">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-          </div>
+        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 animate-scale-up">
           <h3 className="text-xl font-bold text-slate-900 mb-2">{confirmDialog.title}</h3>
           <p className="text-slate-600 mb-8 leading-relaxed">{confirmDialog.message}</p>
           <div className="flex space-x-3">
-            <button 
-              onClick={() => setConfirmDialog(null)}
-              className="flex-1 px-4 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all"
-            >
-              Annuler
-            </button>
-            <button 
-              onClick={confirmDialog.onConfirm}
-              className="flex-1 px-4 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg shadow-red-100 hover:bg-red-700 transition-all"
-            >
-              Confirmer
-            </button>
+            <button onClick={() => setConfirmDialog(null)} className="flex-1 px-4 py-3 text-slate-600 font-bold hover:bg-slate-50 rounded-xl transition-all">Annuler</button>
+            <button onClick={confirmDialog.onConfirm} className="flex-1 px-4 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-all">Confirmer</button>
           </div>
         </div>
-        <style>{`
-          @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-          @keyframes scaleUp { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-          .animate-fade-in { animation: fadeIn 0.2s ease-out; }
-          .animate-scale-up { animation: scaleUp 0.2s ease-out; }
-        `}</style>
       </div>
     );
   };
 
-  // 1. SELECT CONDO VIEW
   if (!selectedCondo) {
     return (
       <div className="space-y-8 animate-fade-in">
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-bold text-slate-800">Mes Copropriétés</h2>
           <div className="flex space-x-2">
-            <button 
-              onClick={() => setActiveTab('schema')}
-              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-                activeTab === 'schema' 
-                ? 'bg-indigo-600 text-white' 
-                : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-              }`}
-            >
-              Structure DB
-            </button>
-            <button 
-              onClick={() => setShowNewCondoForm(true)}
-              className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:bg-indigo-700 transition-all"
-            >
-              + Nouvelle Copropriété
-            </button>
+            <button onClick={() => setActiveTab('schema')} className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === 'schema' ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-700'}`}>Structure DB</button>
+            <button onClick={() => setShowNewCondoForm(true)} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:bg-indigo-700 transition-all">+ Nouvelle Copropriété</button>
           </div>
         </div>
 
-        {activeTab === 'schema' ? (
-          <div className="animate-fade-in">
-            <div className="flex items-center mb-4">
-              <button onClick={() => setActiveTab('coproprietaires')} className="text-indigo-600 font-bold text-sm flex items-center hover:underline">
-                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
-                Retour à la liste
-              </button>
-            </div>
-            <SchemaVisualizer />
-          </div>
-        ) : (
-          <>
-            {showNewCondoForm && (
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg animate-slide-down">
-                <h3 className="font-bold mb-4">Enregistrer un nouvel immeuble</h3>
-                <form onSubmit={handleCreateCondoSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input 
-                    placeholder="Nom de la résidence" 
-                    className="px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                    value={newCondo.name}
-                    onChange={e => setNewCondo({...newCondo, name: e.target.value})}
-                    required
-                  />
-                  <input 
-                    placeholder="Adresse complète" 
-                    className="px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                    value={newCondo.address}
-                    onChange={e => setNewCondo({...newCondo, address: e.target.value})}
-                    required
-                  />
-                  <div className="md:col-span-2 flex justify-end space-x-2">
-                    <button type="button" onClick={() => setShowNewCondoForm(false)} className="px-4 py-2 text-slate-500 hover:text-slate-700">Annuler</button>
-                    <button type="submit" className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold">Enregistrer</button>
-                  </div>
-                </form>
+        {showNewCondoForm && (
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-lg animate-slide-down">
+            <h3 className="font-bold mb-4">Enregistrer un nouvel immeuble</h3>
+            <form onSubmit={handleCreateCondoSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <input placeholder="Nom" className="px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newCondo.name} onChange={e => setNewCondo({...newCondo, name: e.target.value})} required />
+              <input placeholder="Adresse" className="px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newCondo.address} onChange={e => setNewCondo({...newCondo, address: e.target.value})} required />
+              <div className="md:col-span-2 flex justify-end space-x-2">
+                <button type="button" onClick={() => setShowNewCondoForm(false)} className="px-4 py-2 text-slate-500">Annuler</button>
+                <button type="submit" className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold">Enregistrer</button>
               </div>
-            )}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {condominiums.map(condo => (
-                <button 
-                  key={condo.id}
-                  onClick={() => handleSelectCondoClick(condo)}
-                  className="bg-white p-6 rounded-2xl border border-slate-200 text-left hover:border-indigo-400 hover:shadow-md transition-all group"
-                >
-                  <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
-                  </div>
-                  <h3 className="font-bold text-slate-800 text-lg mb-1">{condo.name}</h3>
-                  <p className="text-sm text-slate-500">{condo.address}</p>
-                </button>
-              ))}
-              {condominiums.length === 0 && (
-                <div className="md:col-span-3 text-center py-20 text-slate-400 italic">
-                  Aucune copropriété enregistrée.
-                </div>
-              )}
-            </div>
-          </>
+            </form>
+          </div>
         )}
+
+        {activeTab === 'schema' ? <div className="animate-fade-in"><button onClick={() => setActiveTab('coproprietaires')} className="text-indigo-600 font-bold text-sm flex items-center mb-4"><svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>Retour</button><SchemaVisualizer /></div> : 
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {condominiums.map(condo => (
+            <button key={condo.id} onClick={() => onSelectCondo(condo)} className="bg-white p-6 rounded-2xl border border-slate-200 text-left hover:border-indigo-400 hover:shadow-md transition-all group">
+              <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg></div>
+              <h3 className="font-bold text-slate-800 text-lg mb-1">{condo.name}</h3>
+              <p className="text-sm text-slate-500">{condo.address}</p>
+            </button>
+          ))}
+        </div>}
       </div>
     );
   }
 
-  // Active resolution object for results display
   const selectedResObj = resolutions.find(r => r.id === selectedResultRes);
 
-  // 2. CONDO ACTIVE VIEW
   return (
     <div className="space-y-6">
       {renderConfirmationModal()}
-      
       <div className="flex items-center space-x-4 mb-4">
-        <button onClick={() => onSelectCondo(null)} className="p-2 hover:bg-slate-200 rounded-lg transition-colors">
-          <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-        </button>
-        <div>
-          <h2 className="text-2xl font-bold text-slate-800">{selectedCondo.name}</h2>
-          <p className="text-sm text-slate-500">{selectedCondo.address}</p>
-        </div>
+        <button onClick={() => onSelectCondo(null)} className="p-2 hover:bg-slate-200 rounded-lg"><svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg></button>
+        <div><h2 className="text-2xl font-bold text-slate-800">{selectedCondo.name}</h2><p className="text-sm text-slate-500">{selectedCondo.address}</p></div>
       </div>
 
       <div className="flex space-x-1 bg-white p-1 rounded-xl shadow-sm border border-slate-200">
-        <button
-          onClick={() => setActiveTab('coproprietaires')}
-          className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
-            activeTab === 'coproprietaires' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          Copropriétaires
-        </button>
-        <button
-          onClick={() => setActiveTab('meetings')}
-          className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${
-            activeTab === 'meetings' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          Assemblées Générales
-        </button>
+        <button onClick={() => setActiveTab('coproprietaires')} className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${activeTab === 'coproprietaires' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>Copropriétaires</button>
+        <button onClick={() => setActiveTab('meetings')} className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all ${activeTab === 'meetings' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>Assemblées Générales</button>
       </div>
 
       {activeTab === 'coproprietaires' && (
         <div className="grid md:grid-cols-3 gap-6 animate-fade-in">
           <div className="md:col-span-1 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 h-fit">
-            <h3 className="text-lg font-bold mb-4 text-slate-800">
-              {editingVoterId ? 'Modifier Votant' : 'Nouveau Votant'}
-            </h3>
+            <h3 className="text-lg font-bold mb-4">{editingVoterId ? 'Modifier Votant' : 'Nouveau Votant'}</h3>
             <form onSubmit={handleVoterSubmit} className="space-y-4">
-              <input 
-                placeholder="Nom complet" 
-                className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                value={newVoter.name}
-                onChange={e => setNewVoter({...newVoter, name: e.target.value})}
-                required
-              />
-              <input 
-                type="email" 
-                placeholder="Email" 
-                className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                value={newVoter.email}
-                onChange={e => setNewVoter({...newVoter, email: e.target.value})}
-                required
-              />
-              {!editingVoterId && (
-                <input 
-                  type="password" 
-                  placeholder="Mot de passe" 
-                  className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                  value={newVoter.password}
-                  onChange={e => setNewVoter({...newVoter, password: e.target.value})}
-                  required
-                />
-              )}
+              <input placeholder="Nom complet" className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newVoter.name} onChange={e => setNewVoter({...newVoter, name: e.target.value})} required />
+              <input type="email" placeholder="Email" className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newVoter.email} onChange={e => setNewVoter({...newVoter, email: e.target.value})} required />
+              {!editingVoterId && <input type="password" placeholder="Mot de passe" className="w-full px-4 py-2 bg-slate-50 border rounded-lg outline-none focus:ring-2 ring-indigo-500" value={newVoter.password} onChange={e => setNewVoter({...newVoter, password: e.target.value})} required />}
               <div className="flex gap-2">
-                <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold hover:bg-indigo-700 transition-colors">
-                  {editingVoterId ? 'Mettre à jour' : 'Enregistrer'}
-                </button>
-                {editingVoterId && (
-                  <button type="button" onClick={cancelVoterEdit} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg font-bold hover:bg-slate-200 transition-colors">
-                    Annuler
-                  </button>
-                )}
+                <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold">{editingVoterId ? 'Mettre à jour' : 'Ajouter'}</button>
+                {editingVoterId && <button type="button" onClick={() => setEditingVoterId(null)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg">Annuler</button>}
               </div>
             </form>
           </div>
           <div className="md:col-span-2 bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
             <table className="w-full text-left">
-              <thead className="bg-slate-50 border-b">
-                <tr>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Participant</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase">Email</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase text-right">Actions</th>
+              <thead className="bg-slate-50 border-b"><tr className="text-xs font-bold text-slate-500 uppercase"><th className="px-6 py-4">Nom</th><th className="px-6 py-4">Email</th><th className="px-6 py-4 text-right">Action</th></tr></thead>
+              <tbody className="divide-y">{participants.map(p => (
+                <tr key={p.id} className="hover:bg-slate-50 transition-colors group">
+                  <td className="px-6 py-4 font-medium">{p.name}</td>
+                  <td className="px-6 py-4 text-slate-600">{p.email}</td>
+                  <td className="px-6 py-4 text-right"><button onClick={() => startEditingVoter(p)} className="text-indigo-600 font-bold text-xs opacity-0 group-hover:opacity-100 transition-all uppercase">Modifier</button></td>
                 </tr>
-              </thead>
-              <tbody className="divide-y">
-                {participants.map(p => (
-                  <tr key={p.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="px-6 py-4 font-medium text-slate-800">{p.name}</td>
-                    <td className="px-6 py-4 text-slate-600">{p.email}</td>
-                    <td className="px-6 py-4 text-right">
-                       <button 
-                        onClick={() => startEditingVoter(p)}
-                        className="text-indigo-600 hover:text-indigo-900 font-bold text-xs uppercase p-2 rounded hover:bg-indigo-50 transition-all opacity-0 group-hover:opacity-100"
-                       >
-                         Modifier
-                       </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+              ))}</tbody>
             </table>
           </div>
         </div>
@@ -464,35 +338,18 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
             <div className="space-y-6">
               <div className="flex justify-between items-center">
                 <h3 className="font-bold text-slate-700">Sessions d'Assemblées Générales</h3>
-                <button 
-                  onClick={() => setShowNewMeetingForm(true)}
-                  className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-200 transition-all"
-                >
-                  + Créer une AG
-                </button>
+                <button onClick={() => setShowNewMeetingForm(true)} className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-200 transition-all">+ Créer une AG</button>
               </div>
 
               {showNewMeetingForm && (
                 <div className="bg-indigo-50 p-6 rounded-2xl border border-indigo-100 shadow-sm animate-slide-down">
                   <h4 className="font-bold text-indigo-900 mb-4">Nouvelle session</h4>
                   <form onSubmit={handleCreateMeetingSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <input 
-                      placeholder="Titre de l'AG" 
-                      className="md:col-span-2 px-4 py-2 bg-white border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                      value={newMeeting.title}
-                      onChange={e => setNewMeeting({...newMeeting, title: e.target.value})}
-                      required
-                    />
-                    <input 
-                      type="date" 
-                      className="px-4 py-2 bg-white border rounded-lg outline-none focus:ring-2 ring-indigo-500"
-                      value={newMeeting.date}
-                      onChange={e => setNewMeeting({...newMeeting, date: e.target.value})}
-                      required
-                    />
+                    <input placeholder="Titre de l'AG" className="md:col-span-2 px-4 py-2 bg-white border rounded-lg outline-none" value={newMeeting.title} onChange={e => setNewMeeting({...newMeeting, title: e.target.value})} required />
+                    <input type="date" className="px-4 py-2 bg-white border rounded-lg outline-none" value={newMeeting.date} onChange={e => setNewMeeting({...newMeeting, date: e.target.value})} required />
                     <div className="md:col-span-3 flex justify-end space-x-2">
-                      <button type="button" onClick={() => setShowNewMeetingForm(false)} className="px-4 py-2 text-indigo-400 hover:text-indigo-600">Annuler</button>
-                      <button type="submit" className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold">Valider la création</button>
+                      <button type="button" onClick={() => setShowNewMeetingForm(false)} className="px-4 py-2 text-indigo-400">Annuler</button>
+                      <button type="submit" className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold">Valider</button>
                     </div>
                   </form>
                 </div>
@@ -503,37 +360,34 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                   <div key={m.id} className="bg-white p-6 rounded-2xl border border-slate-200 flex justify-between items-center shadow-sm hover:border-indigo-300 transition-all">
                     <div>
                       <h4 className="font-bold text-slate-800 text-lg">{m.title}</h4>
-                      <p className="text-sm text-slate-500 flex items-center">
-                        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2-2v12a2 2 0 002 2z" /></svg>
-                        {new Date(m.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
-                      </p>
+                      <p className="text-sm text-slate-500 flex items-center"><svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2-2v12a2 2 0 002 2z" /></svg>{new Date(m.date).toLocaleDateString('fr-FR')}</p>
                     </div>
-                    <button 
-                      onClick={() => onSelectMeeting(m)}
-                      className="bg-indigo-600 text-white px-6 py-2 rounded-xl font-bold shadow-md hover:shadow-lg transition-all"
-                    >
-                      Démarrer session
-                    </button>
+                    <button onClick={() => onSelectMeeting(m)} className="bg-indigo-600 text-white px-8 py-2.5 rounded-xl font-bold shadow-md hover:bg-indigo-700 transition-all">Ouvrir</button>
                   </div>
                 ))}
               </div>
             </div>
           ) : (
             <div className="space-y-6 animate-fade-in">
-              {/* MEETING ACTIVE NAVIGATION */}
-              <div className="bg-slate-800 text-white p-6 rounded-2xl flex justify-between items-center">
+              <div className="bg-slate-800 text-white p-6 rounded-2xl flex justify-between items-center shadow-lg">
                 <div className="flex items-center space-x-4">
-                   <button onClick={() => onSelectMeeting(null)} className="p-2 hover:bg-slate-700 rounded-lg">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                   </button>
-                   <div>
-                    <h3 className="text-xl font-bold">{activeMeeting.title}</h3>
-                    <p className="text-slate-400 text-sm">Session active • {new Date(activeMeeting.date).toLocaleDateString()}</p>
-                   </div>
+                   <button onClick={() => onSelectMeeting(null)} className="p-2 hover:bg-slate-700 rounded-lg"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg></button>
+                   <div><h3 className="text-xl font-bold">{activeMeeting.title}</h3><p className="text-slate-400 text-sm">Session active • {new Date(activeMeeting.date).toLocaleDateString()}</p></div>
                 </div>
-                <div className="flex space-x-1 bg-slate-700 p-1 rounded-lg">
-                  <button onClick={() => setMeetingTab('resolutions')} className={`px-4 py-2 rounded-md text-xs font-bold uppercase ${meetingTab === 'resolutions' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Résolutions</button>
-                  <button onClick={() => setMeetingTab('results')} className={`px-4 py-2 rounded-md text-xs font-bold uppercase ${meetingTab === 'results' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Résultats Live</button>
+                <div className="flex items-center">
+                  <button 
+                    onClick={handleExportCSV}
+                    className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-bold flex items-center transition-all mr-4 border border-slate-600"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Exporter CSV
+                  </button>
+                  <div className="flex space-x-1 bg-slate-700 p-1 rounded-lg">
+                    <button onClick={() => setMeetingTab('resolutions')} className={`px-4 py-2 rounded-md text-xs font-bold uppercase transition-all ${meetingTab === 'resolutions' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Résolutions</button>
+                    <button onClick={() => setMeetingTab('results')} className={`px-4 py-2 rounded-md text-xs font-bold uppercase transition-all ${meetingTab === 'results' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}>Détails</button>
+                  </div>
                 </div>
               </div>
 
@@ -542,25 +396,11 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                     <h3 className="text-lg font-bold mb-4">Préparation des résolutions</h3>
                     <div className="space-y-4">
-                      <input 
-                        placeholder="Titre court" 
-                        className="w-full px-4 py-2 bg-slate-50 border rounded-lg"
-                        value={newTitle}
-                        onChange={e => setNewTitle(e.target.value)}
-                      />
-                      <textarea 
-                        placeholder="Idée brute pour formulation IA..." 
-                        className="w-full px-4 py-3 bg-slate-50 border rounded-xl min-h-[100px]"
-                        value={newRes}
-                        onChange={e => setNewRes(e.target.value)}
-                      />
+                      <input placeholder="Titre court" className="w-full px-4 py-2 bg-slate-50 border rounded-lg focus:ring-2 ring-indigo-500 outline-none" value={newTitle} onChange={e => setNewTitle(e.target.value)} />
+                      <textarea placeholder="Idée brute pour formulation IA..." className="w-full px-4 py-3 bg-slate-50 border rounded-xl min-h-[100px] focus:ring-2 ring-indigo-500 outline-none" value={newRes} onChange={e => setNewRes(e.target.value)} />
                       <div className="flex gap-4">
-                        <button onClick={handleDraftResolution} disabled={loadingAI || !newRes} className="flex-1 bg-indigo-50 text-indigo-700 border border-indigo-200 py-3 rounded-xl font-bold">
-                          {loadingAI ? 'Formulation...' : 'Formuler par IA'}
-                        </button>
-                        <button onClick={handleAddFinalResolution} disabled={!newTitle || !newRes} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold">
-                          Ajouter au vote
-                        </button>
+                        <button onClick={handleDraftResolution} disabled={loadingAI || !newRes} className="flex-1 bg-indigo-50 text-indigo-700 border border-indigo-200 py-3 rounded-xl font-bold hover:bg-indigo-100 transition-colors">{loadingAI ? 'Formulation...' : 'Formuler par IA'}</button>
+                        <button onClick={handleAddFinalResolution} disabled={!newTitle || !newRes} className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100">Ajouter au vote</button>
                       </div>
                     </div>
                   </div>
@@ -568,31 +408,29 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                   <div className="grid gap-4">
                     {resolutions.map(res => {
                       const participationPercent = participants.length > 0 ? Math.round((res.votes.length / participants.length) * 100) : 0;
-                      
                       return (
-                        <div key={res.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex justify-between items-center">
-                          <div className="max-w-2xl">
-                            <div className="flex items-center space-x-2 mb-1">
-                              <span className="font-bold text-slate-800">{res.title}</span>
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase whitespace-nowrap ${
-                                res.status === ResolutionStatus.ACTIVE ? 'bg-green-100 text-green-700' : 
-                                res.status === ResolutionStatus.CLOSED ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'
-                              }`}>
-                                {res.status === ResolutionStatus.ACTIVE ? 'SCRUTIN OUVERT' : 
-                                 res.status === ResolutionStatus.CLOSED ? `CLOS (votants: ${participationPercent}%)` : 
-                                 'À VENIR'}
-                              </span>
+                        <div key={res.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center group transition-all hover:border-indigo-200 relative overflow-hidden">
+                          <div className="w-1/4 pr-4 border-r border-slate-100">
+                            <div className="flex flex-col space-y-1">
+                              <span className="font-bold text-slate-800 text-sm truncate block" title={res.title}>{res.title}</span>
+                              <div className="flex"><span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase whitespace-nowrap ${res.status === ResolutionStatus.ACTIVE ? 'bg-green-100 text-green-700' : res.status === ResolutionStatus.CLOSED ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'}`}>{res.status === ResolutionStatus.ACTIVE ? 'Scrutin ouvert' : res.status === ResolutionStatus.CLOSED ? `Clôturé` : 'En attente'}</span></div>
                             </div>
-                            <p className="text-sm text-slate-500 line-clamp-1">{res.description}</p>
                           </div>
-                          <div className="flex space-x-2">
-                            {res.status === ResolutionStatus.PENDING && (
-                              <button onClick={() => onUpdateResolutionStatus(res.id, ResolutionStatus.ACTIVE)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Ouvrir vote</button>
-                            )}
-                            {res.status === ResolutionStatus.ACTIVE && (
-                              <button onClick={() => handleCloseVote(res)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold">Clôturer</button>
-                            )}
+
+                          <div className="flex-grow px-10 flex flex-col justify-center">
+                            <div className="flex items-center justify-between mb-1.5 px-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Participation</span><span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 rounded-full">{participationPercent}%</span></div>
+                            <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50 shadow-inner">
+                              <div className={`h-full transition-all duration-1000 ease-out relative ${res.status === ResolutionStatus.ACTIVE ? 'bg-indigo-600 animate-pulse-subtle' : 'bg-slate-300'}`} style={{ width: `${participationPercent}%` }}>
+                                {res.status === ResolutionStatus.ACTIVE && <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }}></div>}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex space-x-2 flex-shrink-0 pl-4 items-center">
+                            {res.status === ResolutionStatus.PENDING && <button onClick={() => onUpdateResolutionStatus(res.id, ResolutionStatus.ACTIVE)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-green-700 transition-all shadow-sm">Ouvrir</button>}
+                            {res.status === ResolutionStatus.ACTIVE && <button onClick={() => handleCloseVote(res)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-700 transition-all shadow-sm">Clôturer</button>}
                             {res.status === ResolutionStatus.CLOSED && getResolutionResultBadge(res)}
+                            <button onClick={() => handleDeleteConfirm(res)} className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all" title="Retirer"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                           </div>
                         </div>
                       );
@@ -605,51 +443,23 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                    <div className="md:col-span-1 space-y-2">
                     {resolutions.map(res => (
-                      <button 
-                        key={res.id} 
-                        onClick={() => setSelectedResultRes(res.id)}
-                        className={`w-full text-left p-4 rounded-xl border transition-all ${selectedResultRes === res.id ? 'bg-indigo-50 border-indigo-500' : 'bg-white border-slate-200'}`}
-                      >
-                        <div className="font-bold text-sm truncate">{res.title}</div>
-                        <div className="text-[10px] text-slate-400">{res.votes.length} votes</div>
-                      </button>
+                      <button key={res.id} onClick={() => setSelectedResultRes(res.id)} className={`w-full text-left p-4 rounded-xl border transition-all ${selectedResultRes === res.id ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:bg-slate-50'}`}><div className="font-bold text-sm truncate">{res.title}</div><div className="text-[10px] text-slate-400 font-medium">{res.votes.length} votes</div></button>
                     ))}
                    </div>
                    <div className="md:col-span-3">
                       {selectedResObj ? (
-                        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-6">
-                           <h4 className="text-xl font-bold">{selectedResObj.title}</h4>
-                           <div className="h-64">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={getVoteData(selectedResObj)}>
-                                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                  <XAxis dataKey="name" />
-                                  <YAxis allowDecimals={false} />
-                                  <Tooltip />
-                                  <Bar dataKey="value">
-                                    {getVoteData(selectedResObj).map((entry, index) => (
-                                      <Cell key={`cell-${index}`} fill={entry.color} />
-                                    ))}
-                                  </Bar>
-                                </BarChart>
-                              </ResponsiveContainer>
-                           </div>
-                           <div className="space-y-2">
+                        <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm space-y-6 animate-fade-in">
+                           <div className="flex justify-between items-start border-b pb-4"><div><h4 className="text-xl font-bold text-slate-800">{selectedResObj.title}</h4><p className="text-sm text-slate-500 mt-1">{selectedResObj.description}</p></div>{getResolutionResultBadge(selectedResObj)}</div>
+                           <div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={getVoteData(selectedResObj)}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" /><YAxis allowDecimals={false} /><Tooltip cursor={{fill: '#f8fafc'}} /><Bar dataKey="value" radius={[4, 4, 0, 0]}>{getVoteData(selectedResObj).map((entry, index) => (<Cell key={`cell-${index}`} fill={entry.color} />))}</Bar></BarChart></ResponsiveContainer></div>
+                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               {selectedResObj.votes.map((v, idx) => {
                                 const participant = participants.find(p => p.id === v.voterId.toString());
-                                return (
-                                  <div key={idx} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg text-sm">
-                                    <span className="font-medium">{participant?.name || 'Inconnu'}</span>
-                                    <span className="font-bold uppercase text-[10px]">{v.option}</span>
-                                  </div>
-                                );
+                                return (<div key={idx} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg text-xs border border-slate-100"><span className="font-semibold text-slate-700">{participant?.name || 'Inconnu'}</span><span className={`font-extrabold uppercase px-2 py-0.5 rounded text-[9px] ${v.option === VoteOption.YES ? 'bg-green-100 text-green-700' : v.option === VoteOption.NO ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{v.option}</span></div>);
                               })}
                            </div>
                         </div>
                       ) : (
-                        <div className="bg-slate-50 h-full rounded-2xl border border-dashed border-slate-300 flex items-center justify-center text-slate-400">
-                          Sélectionnez une résolution pour voir les résultats.
-                        </div>
+                        <div className="bg-slate-50 h-full min-h-[400px] rounded-2xl border border-dashed border-slate-300 flex flex-col items-center justify-center text-slate-400 text-center px-10"><p className="font-medium">Sélectionnez une résolution à gauche pour analyser les résultats.</p></div>
                       )}
                    </div>
                 </div>
@@ -658,6 +468,12 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
           )}
         </div>
       )}
+      <style>{`
+        @keyframes pulse-subtle { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        .animate-pulse-subtle { animation: pulse-subtle 2s infinite ease-in-out; }
+        .animate-shimmer { animation: shimmer 3s infinite linear; }
+      `}</style>
     </div>
   );
 };

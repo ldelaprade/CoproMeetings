@@ -18,6 +18,7 @@ import {
   saveResolution,
   getAllResolutions,
   updateResStatus,
+  deleteResolution,
   registerVote,
   openLocalDatabaseFile,
   createLocalDatabaseFile
@@ -211,6 +212,13 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteResolution = (id: string) => {
+    deleteResolution(id);
+    if (activeMeeting) {
+      refreshMeetingData(activeMeeting.id);
+    }
+  };
+
   const handleVote = (resId: string, option: VoteOption) => {
     if (currentUser) {
       registerVote(resId, currentUser.id, option);
@@ -347,6 +355,7 @@ const App: React.FC = () => {
           onUpdateParticipant={handleUpdateParticipant}
           onAddResolution={handleAddResolution}
           onUpdateResolutionStatus={handleUpdateStatus}
+          onDeleteResolution={handleDeleteResolution}
         />
       ) : (
         currentUser && (

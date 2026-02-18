@@ -254,6 +254,14 @@ export const updateResStatus = (id: string, status: string) => {
   broadcastChange('RESOLUTION_STATUS_CHANGED', { id, status });
 };
 
+export const deleteResolution = (id: string) => {
+  if (!db) return;
+  db.run("DELETE FROM votes WHERE resolution_id = ?", [id]);
+  db.run("DELETE FROM resolutions WHERE id = ?", [id]);
+  persistDatabase();
+  broadcastChange('DATA_CHANGED');
+};
+
 export const getAllResolutions = (meetingId: number) => {
   if (!db) return [];
   const stmt = db.prepare("SELECT * FROM resolutions WHERE meeting_id = ?");
