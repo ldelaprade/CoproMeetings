@@ -1,15 +1,16 @@
 
 import React, { useState } from 'react';
-import { Resolution, ResolutionStatus, VoteOption, UserLogin } from '../types';
+import { Resolution, ResolutionStatus, VoteOption, UserLogin, Participant } from '../types';
 import { updateUserPassword } from '../services/dbService';
 
 interface VoterBoardProps {
   resolutions: Resolution[];
   currentUser: UserLogin;
+  participants: Participant[];
   onVote: (resId: string, option: VoteOption) => void;
 }
 
-const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, onVote }) => {
+const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, participants, onVote }) => {
   const [activeTab, setActiveTab] = useState<'votes' | 'security'>('votes');
   const [passwords, setPasswords] = useState({ current: '', new: '', confirm: '' });
   const [updateStatus, setUpdateStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
@@ -169,22 +170,70 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, onVot
           </section>
 
           <section>
-            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Historique des résolutions</h3>
-            <div className="grid gap-3 opacity-60 grayscale hover:grayscale-0 transition-all">
-              {closedResolutions.map(res => (
-                <div key={res.id} className="bg-white p-4 rounded-xl border border-slate-200 flex justify-between items-center text-sm">
-                  <div>
-                    <h5 className="font-semibold text-slate-700">{res.title}</h5>
-                    <p className="text-[10px] text-slate-400">Scrutin clos • {res.votes.length} exprimés</p>
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Résolutions clôturées</h3>
+            <div className="grid gap-3">
+              {closedResolutions.map(res => {
+                const forVotes    = res.votes.filter(v => v.option === VoteOption.YES).length;
+                const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
+                const abstainVotes = res.votes.filter(v => v.option === VoteOption.ABSTAIN).length;
+                const totalActive = participants.filter(p => p.isActive).length;
+                const myVote = getMyVote(res);
+
+                let resultLabel = 'Indéterminé';
+                let resultStyle = 'bg-slate-100 text-slate-500 border-slate-200';
+                let resultBorder = 'border-l-slate-300';
+                if (forVotes > 0 || againstVotes > 0) {
+                  if (forVotes > againstVotes) {
+                    resultLabel = 'Adopté';
+                    resultStyle = 'bg-green-100 text-green-800 border-green-200';
+                    resultBorder = 'border-l-green-500';
+                  } else if (againstVotes > forVotes) {
+                    resultLabel = 'Rejeté';
+                    resultStyle = 'bg-red-100 text-red-800 border-red-200';
+                    resultBorder = 'border-l-red-500';
+                  } else {
+                    resultLabel = 'Égalité';
+                    resultStyle = 'bg-amber-100 text-amber-800 border-amber-200';
+                    resultBorder = 'border-l-amber-400';
+                  }
+                }
+
+                const myVoteColor = myVote === VoteOption.YES ? 'text-green-700 bg-green-50'
+                  : myVote === VoteOption.NO ? 'text-red-700 bg-red-50'
+                  : myVote === VoteOption.ABSTAIN ? 'text-slate-600 bg-slate-100'
+                  : 'text-slate-400 bg-slate-50';
+
+                return (
+                  <div key={res.id} className={`bg-white rounded-xl border border-slate-200 border-l-4 ${resultBorder} overflow-hidden`}>
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <span className={`flex-shrink-0 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded border ${resultStyle}`}>{resultLabel}</span>
+                        <h5 className="font-semibold text-slate-700 text-sm truncate">{res.title}</h5>
+                      </div>
+                      <span className={`flex-shrink-0 ml-3 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${myVoteColor}`}>
+                        Vous&nbsp;:&nbsp;{myVote ?? 'Absent'}
+                      </span>
+                    </div>
+                    <div className="flex items-center space-x-4 px-4 pb-3">
+                      <span className="flex items-center text-[11px] text-green-700 font-bold">
+                        <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span>
+                        Pour&nbsp;{forVotes}
+                      </span>
+                      <span className="flex items-center text-[11px] text-red-700 font-bold">
+                        <span className="w-2 h-2 bg-red-500 rounded-full mr-1"></span>
+                        Contre&nbsp;{againstVotes}
+                      </span>
+                      <span className="flex items-center text-[11px] text-slate-500 font-bold">
+                        <span className="w-2 h-2 bg-slate-400 rounded-full mr-1"></span>
+                        Abstention&nbsp;{abstainVotes}
+                      </span>
+                      <span className="ml-auto text-[10px] text-slate-400">{res.votes.length} / {totalActive} votants</span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[10px] font-bold text-slate-400 block uppercase">Mon vote</span>
-                    <span className="font-bold text-slate-600">{getMyVote(res) || 'Non participant'}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {closedResolutions.length === 0 && (
-                <p className="text-xs text-slate-400 italic">Aucune archive disponible.</p>
+                <p className="text-xs text-slate-400 italic">Aucune résolution clôturée pour l'instant.</p>
               )}
             </div>
           </section>

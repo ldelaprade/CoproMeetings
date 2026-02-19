@@ -1,11 +1,13 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { detectEnvironment, detectServerMode } from './detectEnv.ts';
 import { Participant, Resolution, RoleType, ResolutionStatus, VoteOption, Condominium, UserLogin, GeneralMeeting } from './types.ts';
 import Layout from './components/Layout.tsx';
 import LeaderBoard from './components/LeaderBoard.tsx';
 import VoterBoard from './components/VoterBoard.tsx';
 import { 
   initDatabase, 
+  reloadDatabase,
   queryLogin, 
   getUserCondominiums,
   createVoter, 
@@ -25,13 +27,18 @@ import {
   deleteResolution,
   registerVote,
   openLocalDatabaseFile,
-  createLocalDatabaseFile
+  createLocalDatabaseFile,
+  loadDatabaseFromServer,
+  enableServerMode
 } from './services/dbService.ts';
 
 const App: React.FC = () => {
   const [dbReady, setDbReady] = useState(false);
-  const [dbMode, setDbMode] = useState<'local' | 'browser' | null>(null);
+  const [dbMode, setDbMode] = useState<'local' | 'browser' | 'server' | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [env] = useState<'aistudio' | 'local' | 'web'>(detectEnvironment);
+  // Popup création de nouvelle base en mode serveur
+  const [newDbNotice, setNewDbNotice] = useState<string | null>(null);
   
   const [role, setRole] = useState<RoleType | null>(null);
   const [currentUser, setCurrentUser] = useState<UserLogin | null>(null);
@@ -73,23 +80,58 @@ const App: React.FC = () => {
     setResolutions(resFromDb as any);
   }, []);
 
-  useEffect(() => {
-    const syncChannel = new BroadcastChannel('covote_sync');
-    syncChannel.onmessage = async (event) => {
-      await initDatabase(); 
-      
-      if (selectedCondo) {
-        refreshCondoData(selectedCondo.id);
-      }
-      if (activeMeeting) {
-        refreshMeetingData(activeMeeting.id);
-      }
-      if (role === 'MANAGER') {
-        loadInitialData();
-      }
-    };
-    return () => syncChannel.close();
+  // Fonction centralisée de rafraîchissement des données après un sync
+  const syncRefresh = useCallback(async () => {
+    await reloadDatabase();
+    if (selectedCondo) {
+      refreshCondoData(selectedCondo.id);
+    }
+    if (activeMeeting) {
+      refreshMeetingData(activeMeeting.id);
+    }
+    if (role === 'MANAGER') {
+      loadInitialData();
+    }
   }, [selectedCondo, activeMeeting, role, refreshCondoData, refreshMeetingData, loadInitialData]);
+
+  // BroadcastChannel : sync multi-onglets dans le même navigateur
+  useEffect(() => {
+    const bc = new BroadcastChannel('covote_sync');
+    bc.onmessage = () => syncRefresh();
+    return () => bc.close();
+  }, [syncRefresh]);
+
+  // Polling 2s en mode serveur : sync multi-navigateurs / multi-machines
+  useEffect(() => {
+    if (dbMode !== 'server') return;
+    const interval = setInterval(() => syncRefresh(), 2000);
+    return () => clearInterval(interval);
+  }, [dbMode, syncRefresh]);
+
+  // Démarrage automatique en mode Express-server (appelé une seule fois au montage)
+  useEffect(() => {
+    detectServerMode().then(async (serverInfo) => {
+      if (serverInfo) {
+        // Mode Express : charger condominium.sqlite depuis le serveur
+        enableServerMode();
+        const result = await loadDatabaseFromServer();
+        if (result) {
+          setDbMode('server');
+          setDbReady(true);
+          if (!result.loaded) {
+            // Nouvelle base créée
+            setNewDbNotice(result.path);
+          }
+        }
+      } else if (env === 'aistudio') {
+        // AI Studio : stockage navigateur automatique
+        await initDatabase();
+        setDbMode('browser');
+        setDbReady(true);
+      }
+      // Sinon : on laisse l'utilisateur choisir (écran de sélection)
+    });
+  }, []);
 
   const startWithBrowserStorage = async () => {
     await initDatabase();
@@ -276,6 +318,8 @@ const App: React.FC = () => {
   };
 
   if (!dbReady) {
+    // Express-server et aistudio : démarrage automatique géré par useEffect → afficher un spinner
+    // Mode local : afficher l'écran de sélection de source
     return (
       <Layout onLogout={() => {}}>
         <div className="max-w-2xl mx-auto mt-20 p-8 bg-white rounded-3xl shadow-xl border border-slate-100 text-center">
@@ -286,7 +330,6 @@ const App: React.FC = () => {
           </div>
           <h1 className="text-3xl font-extrabold text-slate-900 mb-2">Source de Données</h1>
           <p className="text-slate-500 mb-10">Choisissez comment vous souhaitez accéder à vos données de copropriété.</p>
-          
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <button 
               onClick={startWithBrowserStorage}
@@ -319,10 +362,26 @@ const App: React.FC = () => {
       <Layout onLogout={logout}>
         <div className="max-w-md mx-auto mt-20">
           <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 relative">
+            {/* Badge source de données connectée */}
             {dbMode === 'local' && (
               <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-green-500 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-lg flex items-center">
                 <span className="w-1.5 h-1.5 bg-white rounded-full mr-2 animate-pulse"></span>
                 Connecté : {fileName}
+              </div>
+            )}
+            {dbMode === 'server' && (
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-lg flex items-center">
+                <span className="w-1.5 h-1.5 bg-white rounded-full mr-2 animate-pulse"></span>
+                Mode serveur • condominium.sqlite
+              </div>
+            )}
+
+            {/* Popup nouvelle base créée */}
+            {newDbNotice && (
+              <div className="mb-6 p-4 bg-indigo-50 border border-indigo-200 text-indigo-800 text-sm rounded-xl">
+                <div className="font-bold mb-1">ℹ️ Nouvelle base créée</div>
+                <div className="font-mono text-xs break-all">{newDbNotice}</div>
+                <button onClick={() => setNewDbNotice(null)} className="mt-2 text-xs text-indigo-500 hover:underline">Fermer</button>
               </div>
             )}
             <div className="text-center mb-8">
@@ -375,9 +434,11 @@ const App: React.FC = () => {
                 Se connecter
               </button>
             </form>
-            <button onClick={() => setDbReady(false)} className="w-full mt-6 text-xs text-slate-400 hover:text-indigo-600 transition-colors">
-              Changer de base de données
-            </button>
+            {dbMode !== 'server' && env !== 'aistudio' && (
+              <button onClick={() => setDbReady(false)} className="w-full mt-6 text-xs text-slate-400 hover:text-indigo-600 transition-colors">
+                Changer de base de données
+              </button>
+            )}
           </div>
         </div>
       </Layout>
@@ -468,6 +529,7 @@ const App: React.FC = () => {
             <VoterBoard 
               resolutions={resolutions}
               currentUser={currentUser}
+              participants={participants}
               onVote={handleVote}
             />
           </div>

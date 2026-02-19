@@ -4,8 +4,12 @@
 
 let db: any = null;
 let fileHandle: FileSystemFileHandle | null = null;
+let serverMode = false;
 
 const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v7';
+
+/** Active le mode Express-server : persistDatabase synchronisera aussi vers /api/db */
+export const enableServerMode = () => { serverMode = true; };
 
 // Canal de synchronisation pour simuler SSE en local (multi-onglets)
 const syncChannel = new BroadcastChannel('covote_sync');
@@ -19,6 +23,7 @@ const broadcastChange = (type: string, payload?: any) => {
  */
 export const initDatabase = async (buffer?: Uint8Array) => {
   if (db && !buffer) return db;
+
 
   try {
     const initSqlJsFunc = (window as any).initSqlJs;
@@ -54,6 +59,43 @@ export const initDatabase = async (buffer?: Uint8Array) => {
   } catch (err) {
     console.error("SQL.js init failed", err);
     throw err;
+  }
+};
+
+/**
+ * Force le rechargement de la base depuis la source courante :
+ * - mode serveur  → fetch /api/db
+ * - mode navigateur → relit localStorage
+ * Appellée par le handler de sync pour garantir des données fraîches.
+ */
+export const reloadDatabase = async (): Promise<void> => {
+  const initSqlJsFunc = (window as any).initSqlJs;
+  if (!initSqlJsFunc) return;
+  const SQL = await initSqlJsFunc({
+    locateFile: (file: string) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
+  });
+
+  if (serverMode) {
+    try {
+      const res = await fetch('/api/db');
+      if (res.ok) {
+        const buffer = new Uint8Array(await res.arrayBuffer());
+        db = new SQL.Database(buffer);
+      }
+    } catch (err) {
+      console.error('reloadDatabase (server) failed', err);
+    }
+  } else {
+    // Recharge depuis localStorage
+    const savedDb = localStorage.getItem(DB_STORAGE_KEY);
+    if (savedDb) {
+      try {
+        const uint8Array = new Uint8Array(JSON.parse(savedDb));
+        db = new SQL.Database(uint8Array);
+      } catch (e) {
+        console.error('reloadDatabase (localStorage) failed', e);
+      }
+    }
   }
 };
 
@@ -100,6 +142,16 @@ export const persistDatabase = async () => {
   if (!db) return;
   const data = db.export();
   localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(Array.from(data)));
+
+  if (serverMode) {
+    // Mode Express : on synchronise le fichier sur le serveur
+    await fetch('/api/db', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: data.buffer as ArrayBuffer
+    }).catch(err => console.error('Server sync failed', err));
+    return;
+  }
 
   if (fileHandle) {
     try {
@@ -496,4 +548,61 @@ export const getVoters = (condoId: number) => {
   }
   stmt.free();
   return results;
+};
+
+// ─── Mode Express Server ───────────────────────────────────────────────────
+
+/**
+ * Charge la base depuis l'API Express (/api/db).
+ * Retourne { loaded: true } si le fichier existait,
+ *          { loaded: false, path } si le fichier a été créé,
+ *          null en cas d'erreur réseau.
+ */
+export const loadDatabaseFromServer = async (): Promise<{ loaded: boolean; path: string } | null> => {
+  try {
+    const infoRes = await fetch('/api/info');
+    const info = await infoRes.json();
+    const dbPath: string = info.dbPath;
+
+    const dbRes = await fetch('/api/db');
+
+    const initSqlJsFunc = (window as any).initSqlJs;
+    if (!initSqlJsFunc) throw new Error("sql.js non chargé");
+    const SQL = await initSqlJsFunc({
+      locateFile: (file: string) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
+    });
+
+    if (dbRes.ok) {
+      // Fichier existant → on le charge
+      const buffer = new Uint8Array(await dbRes.arrayBuffer());
+      db = new SQL.Database(buffer);
+      return { loaded: true, path: dbPath };
+    } else {
+      // Fichier absent → créer une nouvelle base + persister sur le serveur
+      db = new SQL.Database();
+      setupSchema();
+      seedInitialData();
+      await persistDatabaseToServer();
+      return { loaded: false, path: dbPath };
+    }
+  } catch (err) {
+    console.error('loadDatabaseFromServer error', err);
+    return null;
+  }
+};
+
+/**
+ * Sauvegarde la base vers l'API Express (/api/db) et aussi dans localStorage.
+ */
+export const persistDatabaseToServer = async () => {
+  if (!db) return;
+  const data: Uint8Array = db.export();
+  // Sauvegarde locale aussi
+  localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(Array.from(data)));
+  // Sauvegarde sur le serveur
+  await fetch('/api/db', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: data.buffer as ArrayBuffer
+  });
 };

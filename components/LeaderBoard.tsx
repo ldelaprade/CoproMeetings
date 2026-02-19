@@ -551,8 +551,27 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                     {resolutions.map(res => {
                       const activeParticipantsCount = participants.filter(p => p.isActive).length;
                       const participationPercent = activeParticipantsCount > 0 ? Math.round((res.votes.length / activeParticipantsCount) * 100) : 0;
+                      const forVotes     = res.votes.filter(v => v.option === VoteOption.YES).length;
+                      const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
+                      const abstainVotes = res.votes.filter(v => v.option === VoteOption.ABSTAIN).length;
+
+                      let resultBorder = '';
+                      if (res.status === ResolutionStatus.CLOSED) {
+                        if (forVotes > 0 || againstVotes > 0) {
+                          if (forVotes > againstVotes) resultBorder = 'border-l-green-500';
+                          else if (againstVotes > forVotes) resultBorder = 'border-l-red-500';
+                          else resultBorder = 'border-l-amber-400';
+                        } else {
+                          resultBorder = 'border-l-slate-300';
+                        }
+                      } else if (res.status === ResolutionStatus.ACTIVE) {
+                        resultBorder = 'border-l-indigo-500';
+                      } else {
+                        resultBorder = 'border-l-amber-300';
+                      }
+
                       return (
-                        <div key={res.id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center group transition-all hover:border-indigo-200 relative overflow-hidden">
+                        <div key={res.id} className={`bg-white p-6 rounded-2xl border border-slate-200 border-l-4 ${resultBorder} shadow-sm flex items-center group transition-all hover:border-indigo-200 relative overflow-hidden`}>
                           <div className="w-1/4 pr-4 border-r border-slate-100">
                             <div className="flex flex-col space-y-1">
                               <span className="font-bold text-slate-800 text-sm truncate block" title={res.title}>{res.title}</span>
@@ -560,9 +579,23 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                             </div>
                           </div>
 
-                          <div className="flex-grow px-10 flex flex-col justify-center">
-                            <div className="flex items-center justify-between mb-1.5 px-1"><span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Participation Actifs</span><span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 rounded-full">{participationPercent}%</span></div>
-                            <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50 shadow-inner">
+                          <div className="flex-grow px-6 flex flex-col justify-center space-y-1.5">
+                            <div className="flex items-center space-x-4">
+                              <span className="flex items-center text-[11px] text-green-700 font-bold">
+                                <span className="w-2 h-2 bg-green-500 rounded-full mr-1"></span>
+                                Pour&nbsp;{forVotes}
+                              </span>
+                              <span className="flex items-center text-[11px] text-red-700 font-bold">
+                                <span className="w-2 h-2 bg-red-500 rounded-full mr-1"></span>
+                                Contre&nbsp;{againstVotes}
+                              </span>
+                              <span className="flex items-center text-[11px] text-slate-500 font-bold">
+                                <span className="w-2 h-2 bg-slate-400 rounded-full mr-1"></span>
+                                Abstention&nbsp;{abstainVotes}
+                              </span>
+                              <span className="ml-auto text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 rounded-full">{participationPercent}%</span>
+                            </div>
+                            <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50 shadow-inner">
                               <div className={`h-full transition-all duration-1000 ease-out relative ${res.status === ResolutionStatus.ACTIVE ? 'bg-indigo-600 animate-pulse-subtle' : 'bg-slate-300'}`} style={{ width: `${Math.min(100, participationPercent)}%` }}>
                                 {res.status === ResolutionStatus.ACTIVE && <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }}></div>}
                               </div>
