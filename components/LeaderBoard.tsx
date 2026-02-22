@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Participant, Resolution, ResolutionStatus, VoteOption, Condominium, GeneralMeeting } from '../types';
+import { Participant, Resolution, ResolutionStatus, VoteOption, Condominium, GeneralMeeting, PowerMandate } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { refineResolution } from '../services/geminiService';
 import { findUserByEmail } from '../services/dbService';
@@ -13,6 +13,7 @@ interface LeaderBoardProps {
   activeMeeting: GeneralMeeting | null;
   participants: Participant[];
   resolutions: Resolution[];
+  powerMandates: PowerMandate[];
   onSelectCondo: (condo: Condominium | null) => void;
   onCreateCondo: (name: string, address: string) => void;
   onSelectMeeting: (meeting: GeneralMeeting | null) => void;
@@ -32,7 +33,8 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
   meetings,
   activeMeeting,
   participants, 
-  resolutions, 
+  resolutions,
+  powerMandates,
   onSelectCondo,
   onCreateCondo,
   onSelectMeeting,
@@ -278,6 +280,36 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
     document.body.removeChild(link);
   };
 
+  const handleExportPowersCSV = () => {
+    if (!activeMeeting) return;
+
+    const headers = ["AG", "Mandant", "Mandataire", "Mode", "Date enregistrement"];
+
+    const rows = powerMandates.length > 0
+      ? powerMandates.map(mandate => [
+          activeMeeting.title,
+          getParticipantName(mandate.grantorId),
+          getParticipantName(mandate.granteeId),
+          mandate.mode === 'DELEGATED' ? 'Vote délégué' : 'Prérempli',
+          new Date(mandate.createdAt).toLocaleString('fr-FR')
+        ])
+      : [[activeMeeting.title, 'Aucun', 'Aucun', 'Aucun pouvoir', '']];
+
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(";"))
+      .join("\n");
+
+    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Pouvoirs_AG_${activeMeeting.title.replace(/\s+/g, '_')}_${new Date().toLocaleDateString('fr-FR').replace(/\//g, '-')}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const getResolutionResultBadge = (res: Resolution) => {
     if (res.status !== ResolutionStatus.CLOSED) return null;
     const forVotes = res.votes.filter(v => v.option === VoteOption.YES).length;
@@ -298,6 +330,47 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
       { name: 'CONTRE', value: no, color: '#ef4444' },
       { name: 'ABSTENTION', value: abstain, color: '#94a3b8' }
     ];
+  };
+
+  const getParticipantName = (id: number) => participants.find(p => p.id === id.toString())?.name || `ID ${id}`;
+
+  const renderPowerMandatesPanel = () => {
+    const mandates = powerMandates;
+
+    return (
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-800">Pouvoirs de l'AG</h3>
+          <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+            {mandates.length} enregistré{mandates.length > 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {mandates.length === 0 ? (
+          <p className="text-sm text-slate-400 italic">Aucun pouvoir enregistré pour cette assemblée.</p>
+        ) : (
+          <div className="space-y-2">
+            {mandates.map(mandate => (
+              <div key={`${mandate.meetingId}-${mandate.grantorId}`} className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl border border-slate-100 bg-slate-50">
+                <div className="text-sm text-slate-700">
+                  <span className="font-semibold">{getParticipantName(mandate.grantorId)}</span>
+                  <span className="mx-2 text-slate-400">→</span>
+                  <span className="font-semibold">{getParticipantName(mandate.granteeId)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded-full border ${mandate.mode === 'DELEGATED' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
+                    {mandate.mode === 'DELEGATED' ? 'Vote délégué' : 'Prérempli'}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {new Date(mandate.createdAt).toLocaleString('fr-FR')}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderConfirmationModal = () => {
@@ -518,6 +591,15 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                 </div>
                 <div className="flex items-center">
                   <button 
+                    onClick={handleExportPowersCSV}
+                    className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-bold flex items-center transition-all mr-2 border border-slate-600"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Exporter Pouvoirs
+                  </button>
+                  <button 
                     onClick={handleExportCSV}
                     className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs font-bold flex items-center transition-all mr-4 border border-slate-600"
                   >
@@ -535,6 +617,8 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
 
               {meetingTab === 'resolutions' && (
                 <div className="space-y-6">
+                  {renderPowerMandatesPanel()}
+
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                     <h3 className="text-lg font-bold mb-4">Préparation des résolutions</h3>
                     <div className="space-y-4">
@@ -551,6 +635,7 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                     {resolutions.map(res => {
                       const activeParticipantsCount = participants.filter(p => p.isActive).length;
                       const participationPercent = activeParticipantsCount > 0 ? Math.round((res.votes.length / activeParticipantsCount) * 100) : 0;
+                      const instructionVotesCount = res.instructionVotes?.length || 0;
                       const forVotes     = res.votes.filter(v => v.option === VoteOption.YES).length;
                       const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
                       const abstainVotes = res.votes.filter(v => v.option === VoteOption.ABSTAIN).length;
@@ -575,7 +660,14 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                           <div className="w-1/4 pr-4 border-r border-slate-100">
                             <div className="flex flex-col space-y-1">
                               <span className="font-bold text-slate-800 text-sm truncate block" title={res.title}>{res.title}</span>
-                              <div className="flex"><span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase whitespace-nowrap ${res.status === ResolutionStatus.ACTIVE ? 'bg-green-100 text-green-700' : res.status === ResolutionStatus.CLOSED ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'}`}>{res.status === ResolutionStatus.ACTIVE ? 'Scrutin ouvert' : res.status === ResolutionStatus.CLOSED ? `Clôturé` : 'En attente'}</span></div>
+                              <div className="flex flex-wrap gap-1.5 items-center">
+                                <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase whitespace-nowrap ${res.status === ResolutionStatus.ACTIVE ? 'bg-green-100 text-green-700' : res.status === ResolutionStatus.CLOSED ? 'bg-slate-100 text-slate-500' : 'bg-amber-100 text-amber-700'}`}>{res.status === ResolutionStatus.ACTIVE ? 'Scrutin ouvert' : res.status === ResolutionStatus.CLOSED ? `Clôturé` : 'En attente'}</span>
+                                {res.status !== ResolutionStatus.CLOSED && instructionVotesCount > 0 && (
+                                  <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase whitespace-nowrap bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                    {instructionVotesCount} consigne{instructionVotesCount > 1 ? 's' : ''}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
 
@@ -632,6 +724,37 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                                 const participant = participants.find(p => p.id === v.voterId.toString());
                                 return (<div key={idx} className={`flex justify-between items-center p-3 bg-slate-50 rounded-lg text-xs border border-slate-100 ${participant && !participant.isActive ? 'opacity-50' : ''}`}><span className="font-semibold text-slate-700">{participant?.name || 'Inconnu'} {participant && !participant.isActive && '(Départ)'}</span><span className={`font-extrabold uppercase px-2 py-0.5 rounded text-[9px] ${v.option === VoteOption.YES ? 'bg-green-100 text-green-700' : v.option === VoteOption.NO ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>{v.option}</span></div>);
                               })}
+                           </div>
+
+                           <div className="pt-2 border-t border-slate-100">
+                              <h5 className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-3">Consignes de vote (pré-votes)</h5>
+                              {(selectedResObj.instructionVotes?.length || 0) === 0 ? (
+                                <p className="text-xs text-slate-400 italic">Aucune consigne enregistrée pour cette résolution.</p>
+                              ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {selectedResObj.instructionVotes?.map((v, idx) => {
+                                    const grantor = participants.find(p => p.id === v.voterId.toString());
+                                    const mandate = powerMandates.find(m => m.grantorId === v.voterId);
+                                    const grantee = mandate ? participants.find(p => p.id === mandate.granteeId.toString()) : null;
+
+                                    return (
+                                      <div key={`instruction-${idx}`} className={`p-3 bg-indigo-50 rounded-lg text-xs border border-indigo-100 ${grantor && !grantor.isActive ? 'opacity-60' : ''}`}>
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="font-semibold text-indigo-900">
+                                            {grantor?.name || 'Inconnu'} {grantor && !grantor.isActive && '(Départ)'}
+                                          </span>
+                                          <span className={`font-extrabold uppercase px-2 py-0.5 rounded text-[9px] ${v.option === VoteOption.YES ? 'bg-green-100 text-green-700' : v.option === VoteOption.NO ? 'bg-red-100 text-red-700' : 'bg-slate-200 text-slate-600'}`}>
+                                            {v.option}
+                                          </span>
+                                        </div>
+                                        <div className="mt-1 text-[10px] text-indigo-700">
+                                          Mandataire : {grantee?.name || 'Non défini'}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                            </div>
                         </div>
                       ) : (

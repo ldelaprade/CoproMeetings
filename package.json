@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "start": "node server.js"
+    "start": "node server.js",
+    "start:debug": "node --inspect server.js",
+    "start:debug:break": "node --inspect-brk server.js",
+    "dev:full": "npm run start:debug & vite"
   },
   "dependencies": {
     "@google/genai": "^1.41.0",

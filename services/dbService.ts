@@ -37,12 +37,14 @@ export const initDatabase = async (buffer?: Uint8Array) => {
 
     if (buffer) {
       db = new SQL.Database(buffer);
+      setupSchema();
     } else {
       const savedDb = localStorage.getItem(DB_STORAGE_KEY);
       if (savedDb) {
         try {
           const uint8Array = new Uint8Array(JSON.parse(savedDb));
           db = new SQL.Database(uint8Array);
+          setupSchema();
         } catch (e) {
           db = new SQL.Database();
           setupSchema();
@@ -195,7 +197,25 @@ const setupSchema = () => {
       FOREIGN KEY(resolution_id) REFERENCES resolutions(id), FOREIGN KEY(voter_id) REFERENCES logins(id),
       UNIQUE(resolution_id, voter_id)
     );
+
+    CREATE TABLE IF NOT EXISTS powers (
+      meeting_id INTEGER,
+      grantor_id INTEGER,
+      grantee_id INTEGER,
+      mode TEXT,
+      created_at INTEGER,
+      PRIMARY KEY(meeting_id, grantor_id),
+      FOREIGN KEY(meeting_id) REFERENCES general_meetings(id),
+      FOREIGN KEY(grantor_id) REFERENCES logins(id),
+      FOREIGN KEY(grantee_id) REFERENCES logins(id)
+    );
   `);
+
+  try {
+    db.run("ALTER TABLE votes ADD COLUMN vote_kind TEXT DEFAULT 'REAL'");
+  } catch (err) {
+    // Colonne déjà existante sur bases migrées
+  }
 };
 
 const seedInitialData = () => {
@@ -400,6 +420,24 @@ export const saveResolution = (res: any) => {
 export const updateResStatus = (id: string, status: string) => {
   if (!db) return;
   db.run("UPDATE resolutions SET status = ? WHERE id = ?", [status, id]);
+
+  if (status === 'ACTIVE') {
+    db.run(`
+      UPDATE votes
+      SET vote_kind = 'REAL', timestamp = ?
+      WHERE resolution_id = ?
+        AND vote_kind = 'INSTRUCTION'
+        AND EXISTS (
+          SELECT 1
+          FROM resolutions r
+          JOIN powers p ON p.meeting_id = r.meeting_id
+          WHERE r.id = votes.resolution_id
+            AND p.grantor_id = votes.voter_id
+            AND p.mode = 'PRE_FILLED'
+        )
+    `, [Date.now(), id]);
+  }
+
   persistDatabase();
   broadcastChange('RESOLUTION_STATUS_CHANGED', { id, status });
 };
@@ -419,12 +457,19 @@ export const getAllResolutions = (meetingId: number) => {
   const results = [];
   while (stmt.step()) {
     const res = stmt.getAsObject();
-    const voteStmt = db.prepare("SELECT voter_id as voterId, option, timestamp FROM votes WHERE resolution_id = ?");
+    const voteStmt = db.prepare("SELECT voter_id as voterId, option, timestamp, vote_kind as voteKind FROM votes WHERE resolution_id = ? AND IFNULL(vote_kind, 'REAL') = 'REAL'");
     voteStmt.bind([res.id]);
     const votes = [];
     while (voteStmt.step()) votes.push(voteStmt.getAsObject());
     voteStmt.free();
-    results.push({ ...res, votes, meetingId: res.meeting_id });
+
+    const instructionStmt = db.prepare("SELECT voter_id as voterId, option, timestamp, vote_kind as voteKind FROM votes WHERE resolution_id = ? AND IFNULL(vote_kind, 'REAL') = 'INSTRUCTION'");
+    instructionStmt.bind([res.id]);
+    const instructionVotes = [];
+    while (instructionStmt.step()) instructionVotes.push(instructionStmt.getAsObject());
+    instructionStmt.free();
+
+    results.push({ ...res, votes, instructionVotes, meetingId: res.meeting_id });
   }
   stmt.free();
   return results;
@@ -432,12 +477,180 @@ export const getAllResolutions = (meetingId: number) => {
 
 export const registerVote = (resId: string, voterId: number, option: string) => {
   if (!db) return;
+
+  const mStmt = db.prepare(`
+    SELECT gm.id as meeting_id
+    FROM resolutions r
+    JOIN general_meetings gm ON gm.id = r.meeting_id
+    WHERE r.id = ?
+  `);
+  mStmt.bind([resId]);
+  let meetingId: number | null = null;
+  if (mStmt.step()) {
+    meetingId = mStmt.getAsObject().meeting_id as number;
+  }
+  mStmt.free();
+
+  if (meetingId !== null) {
+    const pStmt = db.prepare(`
+      SELECT mode FROM powers
+      WHERE meeting_id = ? AND grantor_id = ?
+    `);
+    pStmt.bind([meetingId, voterId]);
+    let blocked = false;
+    if (pStmt.step()) {
+      blocked = pStmt.getAsObject().mode === 'DELEGATED';
+    }
+    pStmt.free();
+
+    if (blocked) {
+      throw new Error("Vous avez délégué votre vote à votre mandataire pour cette AG.");
+    }
+  }
+
   db.run(`
-    INSERT OR REPLACE INTO votes (resolution_id, voter_id, option, timestamp)
-    VALUES (?, ?, ?, ?)
+    INSERT OR REPLACE INTO votes (resolution_id, voter_id, option, timestamp, vote_kind)
+    VALUES (?, ?, ?, ?, 'REAL')
   `, [resId, voterId, option, Date.now()]);
   persistDatabase();
   broadcastChange('VOTE_REGISTERED', { resId, voterId });
+};
+
+export const registerInstructionVote = (resId: string, voterId: number, option: string) => {
+  if (!db) return;
+
+  const stmt = db.prepare(`
+    SELECT status
+    FROM resolutions
+    WHERE id = ?
+  `);
+  stmt.bind([resId]);
+  let status: string | null = null;
+  if (stmt.step()) {
+    status = stmt.getAsObject().status as string;
+  }
+  stmt.free();
+
+  if (status === null) {
+    throw new Error('Résolution introuvable.');
+  }
+  if (status === 'CLOSED') {
+    throw new Error('Impossible de définir une consigne sur une résolution clôturée.');
+  }
+
+  db.run(`
+    INSERT OR REPLACE INTO votes (resolution_id, voter_id, option, timestamp, vote_kind)
+    VALUES (?, ?, ?, ?, 'INSTRUCTION')
+  `, [resId, voterId, option, Date.now()]);
+
+  persistDatabase();
+  broadcastChange('VOTE_REGISTERED', { resId, voterId, voteKind: 'INSTRUCTION' });
+};
+
+export const registerVoteByProxy = (resId: string, grantorId: number, granteeId: number, option: string) => {
+  if (!db) return;
+
+  const mStmt = db.prepare(`
+    SELECT gm.id as meeting_id
+    FROM resolutions r
+    JOIN general_meetings gm ON gm.id = r.meeting_id
+    WHERE r.id = ?
+  `);
+  mStmt.bind([resId]);
+  let meetingId: number | null = null;
+  if (mStmt.step()) {
+    meetingId = mStmt.getAsObject().meeting_id as number;
+  }
+  mStmt.free();
+  if (meetingId === null) {
+    throw new Error('Résolution introuvable.');
+  }
+
+  const authStmt = db.prepare(`
+    SELECT mode FROM powers
+    WHERE meeting_id = ? AND grantor_id = ? AND grantee_id = ?
+  `);
+  authStmt.bind([meetingId, grantorId, granteeId]);
+  let authorized = false;
+  if (authStmt.step()) {
+    authorized = authStmt.getAsObject().mode === 'DELEGATED';
+  }
+  authStmt.free();
+
+  if (!authorized) {
+    throw new Error("Aucun pouvoir délégué valide pour ce vote.");
+  }
+
+  db.run(`
+    INSERT OR REPLACE INTO votes (resolution_id, voter_id, option, timestamp, vote_kind)
+    VALUES (?, ?, ?, ?, 'REAL')
+  `, [resId, grantorId, option, Date.now()]);
+  persistDatabase();
+  broadcastChange('VOTE_REGISTERED', { resId, voterId: grantorId, byProxy: granteeId });
+};
+
+export const upsertPowerMandate = (
+  meetingId: number,
+  grantorId: number,
+  granteeId: number,
+  mode: 'PRE_FILLED' | 'DELEGATED'
+) => {
+  if (!db) return;
+  db.run(`
+    INSERT OR REPLACE INTO powers (meeting_id, grantor_id, grantee_id, mode, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `, [meetingId, grantorId, granteeId, mode, Date.now()]);
+  persistDatabase();
+  broadcastChange('DATA_CHANGED');
+};
+
+export const clearPowerMandate = (meetingId: number, grantorId: number) => {
+  if (!db) return;
+  db.run("DELETE FROM powers WHERE meeting_id = ? AND grantor_id = ?", [meetingId, grantorId]);
+  persistDatabase();
+  broadcastChange('DATA_CHANGED');
+};
+
+export const getMeetingPowerMandates = (meetingId: number) => {
+  if (!db) return [];
+  const stmt = db.prepare(`
+    SELECT meeting_id as meetingId, grantor_id as grantorId, grantee_id as granteeId, mode, created_at as createdAt
+    FROM powers
+    WHERE meeting_id = ?
+  `);
+  stmt.bind([meetingId]);
+  const results = [];
+  while (stmt.step()) results.push(stmt.getAsObject());
+  stmt.free();
+  return results;
+};
+
+export const getPowerMandateForGrantor = (meetingId: number, grantorId: number) => {
+  if (!db) return null;
+  const stmt = db.prepare(`
+    SELECT meeting_id as meetingId, grantor_id as grantorId, grantee_id as granteeId, mode, created_at as createdAt
+    FROM powers
+    WHERE meeting_id = ? AND grantor_id = ?
+  `);
+  stmt.bind([meetingId, grantorId]);
+  let result: any = null;
+  if (stmt.step()) result = stmt.getAsObject();
+  stmt.free();
+  return result;
+};
+
+export const getMandatesForGrantee = (meetingId: number, granteeId: number) => {
+  if (!db) return [];
+  const stmt = db.prepare(`
+    SELECT meeting_id as meetingId, grantor_id as grantorId, grantee_id as granteeId, mode, created_at as createdAt
+    FROM powers
+    WHERE meeting_id = ? AND grantee_id = ? AND mode = 'DELEGATED'
+  `);
+  stmt.bind([meetingId, granteeId]);
+  const results = [];
+  while (stmt.step()) results.push(stmt.getAsObject());
+  stmt.free();
+  return results;
 };
 
 export const getCondominium = (id: number) => {
@@ -576,6 +789,7 @@ export const loadDatabaseFromServer = async (): Promise<{ loaded: boolean; path:
       // Fichier existant → on le charge
       const buffer = new Uint8Array(await dbRes.arrayBuffer());
       db = new SQL.Database(buffer);
+      setupSchema();
       return { loaded: true, path: dbPath };
     } else {
       // Fichier absent → créer une nouvelle base + persister sur le serveur

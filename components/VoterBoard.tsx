@@ -1,25 +1,72 @@
 
-import React, { useState } from 'react';
-import { Resolution, ResolutionStatus, VoteOption, UserLogin, Participant } from '../types';
+import React, { useEffect, useState } from 'react';
+import { Resolution, ResolutionStatus, VoteOption, UserLogin, Participant, PowerMandate, PowerMode } from '../types';
 import { updateUserPassword } from '../services/dbService';
 
 interface VoterBoardProps {
   resolutions: Resolution[];
   currentUser: UserLogin;
   participants: Participant[];
+  powerMandates: PowerMandate[];
   onVote: (resId: string, option: VoteOption) => void;
+  onInstructionVote: (resId: string, option: VoteOption) => void;
+  onVoteByProxy: (resId: string, grantorId: number, option: VoteOption) => void;
+  onSetPowerMandate: (granteeId: number, mode: PowerMode) => { success: boolean; message: string };
+  onClearPowerMandate: () => { success: boolean; message: string };
 }
 
-const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, participants, onVote }) => {
+const VoterBoard: React.FC<VoterBoardProps> = ({
+  resolutions,
+  currentUser,
+  participants,
+  powerMandates,
+  onVote,
+  onInstructionVote,
+  onVoteByProxy,
+  onSetPowerMandate,
+  onClearPowerMandate
+}) => {
   const [activeTab, setActiveTab] = useState<'votes' | 'security'>('votes');
   const [passwords, setPasswords] = useState({ current: '', new: '', confirm: '' });
   const [updateStatus, setUpdateStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
+  const [mandateStatus, setMandateStatus] = useState<{ type: 'success' | 'error', msg: string } | null>(null);
+  const [powerMode, setPowerMode] = useState<PowerMode>('DELEGATED');
+  const [selectedProxyId, setSelectedProxyId] = useState<string>('');
 
   const activeResolutions = resolutions.filter(r => r.status === ResolutionStatus.ACTIVE);
+  const pendingResolutions = resolutions.filter(r => r.status === ResolutionStatus.PENDING);
   const closedResolutions = resolutions.filter(r => r.status === ResolutionStatus.CLOSED);
+  const activeParticipants = participants.filter(p => p.isActive);
+  const availableProxies = activeParticipants.filter(p => p.id !== currentUser.id.toString());
+  const myMandate = powerMandates.find(m => m.grantorId === currentUser.id) || null;
+  const delegatedToMe = powerMandates.filter(m => m.granteeId === currentUser.id && m.mode === 'DELEGATED');
+  const isDirectVoteBlocked = myMandate?.mode === 'DELEGATED';
+
+  useEffect(() => {
+    if (myMandate) {
+      setPowerMode(myMandate.mode as PowerMode);
+      setSelectedProxyId(myMandate.granteeId.toString());
+    } else {
+      setSelectedProxyId('');
+      setPowerMode('DELEGATED');
+    }
+  }, [myMandate?.grantorId, myMandate?.granteeId, myMandate?.mode]);
 
   const hasVoted = (res: Resolution) => res.votes.some(v => v.voterId === currentUser.id);
   const getMyVote = (res: Resolution) => res.votes.find(v => v.voterId === currentUser.id)?.option;
+  const getVoteForGrantor = (res: Resolution, grantorId: number) => res.votes.find(v => v.voterId === grantorId)?.option;
+  const getMyInstructionVote = (res: Resolution) => res.instructionVotes?.find(v => v.voterId === currentUser.id)?.option;
+  const getParticipantName = (id: number) => participants.find(p => p.id === id.toString())?.name || 'Copropriétaire inconnu';
+
+  const handleSaveMandate = () => {
+    const proxyIdNum = parseInt(selectedProxyId, 10);
+    if (!proxyIdNum) {
+      setMandateStatus({ type: 'error', msg: 'Sélectionnez un mandataire avant d’enregistrer.' });
+      return;
+    }
+    const result = onSetPowerMandate(proxyIdNum, powerMode);
+    setMandateStatus({ type: result.success ? 'success' : 'error', msg: result.message });
+  };
 
   const handlePasswordChange = (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,6 +111,117 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, parti
 
       {activeTab === 'votes' && (
         <div className="space-y-8">
+          <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Gestion du pouvoir</h3>
+                <p className="text-sm text-slate-500 mt-1">Choisissez un mandataire pour cette AG, puis définissez si vous préremplissez vos choix ou si le mandataire vote à votre place.</p>
+              </div>
+              {myMandate && (
+                <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                  Pouvoir actif
+                </span>
+              )}
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-3">
+              <select
+                value={selectedProxyId}
+                onChange={e => setSelectedProxyId(e.target.value)}
+                className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 ring-indigo-500"
+              >
+                <option value="">Sélectionner un mandataire</option>
+                {availableProxies.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+
+              <select
+                value={powerMode}
+                onChange={e => setPowerMode(e.target.value as PowerMode)}
+                className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:ring-2 ring-indigo-500"
+              >
+                <option value="PRE_FILLED">Je préremplis mes votes</option>
+                <option value="DELEGATED">Le mandataire vote à ma place</option>
+              </select>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveMandate}
+                  disabled={!selectedProxyId}
+                  className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Enregistrer
+                </button>
+                <button
+                  onClick={() => {
+                    const result = onClearPowerMandate();
+                    setMandateStatus({ type: result.success ? 'success' : 'error', msg: result.message });
+                  }}
+                  disabled={!myMandate}
+                  className="px-4 py-2 bg-slate-100 text-slate-600 rounded-lg text-sm font-bold hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Retirer
+                </button>
+              </div>
+            </div>
+
+            {mandateStatus && (
+              <p className={`mt-3 text-xs rounded-lg px-3 py-2 border ${mandateStatus.type === 'success' ? 'text-green-700 bg-green-50 border-green-200' : 'text-red-700 bg-red-50 border-red-200'}`}>
+                {mandateStatus.msg}
+              </p>
+            )}
+
+            {isDirectVoteBlocked && (
+              <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                Votre mode actuel est “Le mandataire vote à ma place” : vous ne pouvez pas voter directement tant que ce pouvoir est actif.
+              </p>
+            )}
+          </section>
+
+          {delegatedToMe.length > 0 && (
+            <section className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6">
+              <h3 className="text-lg font-bold text-indigo-900 mb-1">Pouvoirs reçus</h3>
+              <p className="text-sm text-indigo-700">Vous votez pour : {delegatedToMe.map(m => getParticipantName(m.grantorId)).join(', ')}</p>
+            </section>
+          )}
+
+          {myMandate?.mode === 'PRE_FILLED' && (
+            <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h3 className="text-lg font-bold text-slate-800 mb-1">Consignes de vote (pré-votes)</h3>
+              <p className="text-sm text-slate-500 mb-4">Définissez vos choix à l'avance pour les résolutions non encore ouvertes. Ils seront appliqués automatiquement à l'ouverture.</p>
+
+              {pendingResolutions.length === 0 ? (
+                <p className="text-sm text-slate-400 italic">Aucune résolution en attente de scrutin.</p>
+              ) : (
+                <div className="space-y-3">
+                  {pendingResolutions.map(res => {
+                    const prefilledChoice = getMyInstructionVote(res);
+                    return (
+                      <div key={res.id} className="border border-slate-200 rounded-xl p-4">
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div>
+                            <h4 className="font-semibold text-slate-800">{res.title}</h4>
+                            <p className="text-xs text-slate-500 mt-1">{res.description}</p>
+                          </div>
+                          <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                            {prefilledChoice ? `Consigne: ${prefilledChoice}` : 'Aucune consigne'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          <button onClick={() => onInstructionVote(res.id, VoteOption.YES)} className="py-2 text-xs font-bold rounded-lg border border-green-200 bg-green-50 text-green-700 hover:bg-green-100">POUR</button>
+                          <button onClick={() => onInstructionVote(res.id, VoteOption.NO)} className="py-2 text-xs font-bold rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100">CONTRE</button>
+                          <button onClick={() => onInstructionVote(res.id, VoteOption.ABSTAIN)} className="py-2 text-xs font-bold rounded-lg border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200">ABSTENTION</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          )}
+
           <section>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center space-x-2">
@@ -109,11 +267,12 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, parti
                         <div className="grid grid-cols-3 gap-4">
                           <button 
                             onClick={() => onVote(res.id, VoteOption.YES)}
+                            disabled={isDirectVoteBlocked}
                             className={`flex flex-col items-center justify-center p-4 border rounded-xl transition-all group relative ${
                               myChoice === VoteOption.YES 
                               ? 'bg-green-50 border-green-500 text-green-700 ring-2 ring-green-100' 
                               : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-green-50 hover:border-green-300 hover:text-green-700'
-                            }`}
+                            } ${isDirectVoteBlocked ? 'opacity-50 cursor-not-allowed' : ''}`}
                           >
                             <span className="text-lg font-bold">POUR</span>
                             <span className="text-[10px] opacity-60">Validation</span>
@@ -126,11 +285,12 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, parti
                           
                           <button 
                             onClick={() => onVote(res.id, VoteOption.NO)}
+                            disabled={isDirectVoteBlocked}
                             className={`flex flex-col items-center justify-center p-4 border rounded-xl transition-all group relative ${
                               myChoice === VoteOption.NO 
                               ? 'bg-red-50 border-red-500 text-red-700 ring-2 ring-red-100' 
                               : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700'
-                            }`}
+                            } ${isDirectVoteBlocked ? 'opacity-50 cursor-not-allowed' : ''}`}
                           >
                             <span className="text-lg font-bold">CONTRE</span>
                             <span className="text-[10px] opacity-60">Refus</span>
@@ -143,11 +303,12 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, parti
                           
                           <button 
                             onClick={() => onVote(res.id, VoteOption.ABSTAIN)}
+                            disabled={isDirectVoteBlocked}
                             className={`flex flex-col items-center justify-center p-4 border rounded-xl transition-all group relative ${
                               myChoice === VoteOption.ABSTAIN 
                               ? 'bg-slate-200 border-slate-500 text-slate-800 ring-2 ring-slate-100' 
                               : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-200 hover:border-slate-400'
-                            }`}
+                            } ${isDirectVoteBlocked ? 'opacity-50 cursor-not-allowed' : ''}`}
                           >
                             <span className="text-lg font-bold uppercase">Abstention</span>
                             <span className="text-[10px] opacity-60">Neutre</span>
@@ -161,6 +322,30 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, parti
                         <p className="mt-4 text-[10px] text-slate-400 text-center italic">
                           Vous pouvez modifier votre choix jusqu'à la clôture du scrutin par le gestionnaire.
                         </p>
+
+                        {delegatedToMe.length > 0 && (
+                          <div className="mt-5 pt-4 border-t border-slate-100 space-y-3">
+                            <h5 className="text-xs font-bold uppercase text-slate-500">Votes en tant que mandataire</h5>
+                            {delegatedToMe.map(mandate => {
+                              const delegatedChoice = getVoteForGrantor(res, mandate.grantorId);
+                              return (
+                                <div key={mandate.grantorId} className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <span className="text-sm font-semibold text-indigo-900">Pour {getParticipantName(mandate.grantorId)}</span>
+                                    <span className="text-[10px] font-bold uppercase text-indigo-700 bg-indigo-100 px-2 py-1 rounded-full">
+                                      {delegatedChoice ? `Choix: ${delegatedChoice}` : 'Pas encore voté'}
+                                    </span>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-2">
+                                    <button onClick={() => onVoteByProxy(res.id, mandate.grantorId, VoteOption.YES)} className="py-2 text-xs font-bold rounded-lg border border-green-200 bg-green-50 text-green-700 hover:bg-green-100">POUR</button>
+                                    <button onClick={() => onVoteByProxy(res.id, mandate.grantorId, VoteOption.NO)} className="py-2 text-xs font-bold rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100">CONTRE</button>
+                                    <button onClick={() => onVoteByProxy(res.id, mandate.grantorId, VoteOption.ABSTAIN)} className="py-2 text-xs font-bold rounded-lg border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200">ABSTENTION</button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -176,7 +361,7 @@ const VoterBoard: React.FC<VoterBoardProps> = ({ resolutions, currentUser, parti
                 const forVotes    = res.votes.filter(v => v.option === VoteOption.YES).length;
                 const againstVotes = res.votes.filter(v => v.option === VoteOption.NO).length;
                 const abstainVotes = res.votes.filter(v => v.option === VoteOption.ABSTAIN).length;
-                const totalActive = participants.filter(p => p.isActive).length;
+                const totalActive = activeParticipants.length;
                 const myVote = getMyVote(res);
 
                 let resultLabel = 'Indéterminé';

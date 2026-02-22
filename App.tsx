@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { detectEnvironment, detectServerMode } from './detectEnv.ts';
-import { Participant, Resolution, RoleType, ResolutionStatus, VoteOption, Condominium, UserLogin, GeneralMeeting } from './types.ts';
+import { Participant, Resolution, RoleType, ResolutionStatus, VoteOption, Condominium, UserLogin, GeneralMeeting, PowerMandate, PowerMode } from './types.ts';
 import Layout from './components/Layout.tsx';
 import LeaderBoard from './components/LeaderBoard.tsx';
 import VoterBoard from './components/VoterBoard.tsx';
@@ -26,6 +26,11 @@ import {
   updateResStatus,
   deleteResolution,
   registerVote,
+  registerVoteByProxy,
+  registerInstructionVote,
+  upsertPowerMandate,
+  clearPowerMandate,
+  getMeetingPowerMandates,
   openLocalDatabaseFile,
   createLocalDatabaseFile,
   loadDatabaseFromServer,
@@ -50,6 +55,7 @@ const App: React.FC = () => {
   const [activeMeeting, setActiveMeeting] = useState<GeneralMeeting | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [resolutions, setResolutions] = useState<Resolution[]>([]);
+  const [powerMandates, setPowerMandates] = useState<PowerMandate[]>([]);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
 
   const [voterCondos, setVoterCondos] = useState<Condominium[]>([]);
@@ -78,6 +84,8 @@ const App: React.FC = () => {
   const refreshMeetingData = useCallback((meetingId: number) => {
     const resFromDb = getAllResolutions(meetingId);
     setResolutions(resFromDb as any);
+    const mandates = getMeetingPowerMandates(meetingId);
+    setPowerMandates(mandates as any);
   }, []);
 
   // Fonction centralisée de rafraîchissement des données après un sync
@@ -198,6 +206,7 @@ const App: React.FC = () => {
     setMeetings([]);
     setVoterCondos([]);
     setResolutions([]);
+    setPowerMandates([]);
     setLoginForm({ email: '', password: '' });
     setLoginError(null);
   };
@@ -207,6 +216,7 @@ const App: React.FC = () => {
     setSelectedCondo(condo);
     setActiveMeeting(null);
     setResolutions([]);
+    setPowerMandates([]);
     
     if (condo) {
       refreshCondoData(condo.id);
@@ -215,12 +225,12 @@ const App: React.FC = () => {
         if (condoMeetings.length > 0) {
           const lastMeeting = condoMeetings[0];
           setActiveMeeting(lastMeeting as any);
-          const resFromDb = getAllResolutions(lastMeeting.id);
-          setResolutions(resFromDb as any);
+          refreshMeetingData(lastMeeting.id);
         } else {
           // Si aucune AG, on s'assure que l'état est vide
           setActiveMeeting(null);
           setResolutions([]);
+          setPowerMandates([]);
         }
       }
     }
@@ -237,6 +247,7 @@ const App: React.FC = () => {
       refreshMeetingData(meeting.id);
     } else {
       setResolutions([]);
+      setPowerMandates([]);
     }
   };
 
@@ -310,11 +321,75 @@ const App: React.FC = () => {
 
   const handleVote = (resId: string, option: VoteOption) => {
     if (currentUser) {
-      registerVote(resId, currentUser.id, option);
-      if (activeMeeting) {
-        refreshMeetingData(activeMeeting.id);
+      try {
+        registerVote(resId, currentUser.id, option);
+        if (activeMeeting) {
+          refreshMeetingData(activeMeeting.id);
+        }
+      } catch (error: any) {
+        alert(error?.message || 'Vote impossible.');
       }
     }
+  };
+
+  const handleVoteByProxy = (resId: string, grantorId: number, option: VoteOption) => {
+    if (currentUser) {
+      try {
+        registerVoteByProxy(resId, grantorId, currentUser.id, option);
+        if (activeMeeting) {
+          refreshMeetingData(activeMeeting.id);
+        }
+      } catch (error: any) {
+        alert(error?.message || 'Vote en tant que mandataire impossible.');
+      }
+    }
+  };
+
+  const handleInstructionVote = (resId: string, option: VoteOption) => {
+    if (currentUser) {
+      try {
+        registerInstructionVote(resId, currentUser.id, option);
+        if (activeMeeting) {
+          refreshMeetingData(activeMeeting.id);
+        }
+      } catch (error: any) {
+        alert(error?.message || 'Consigne de vote impossible.');
+      }
+    }
+  };
+
+  const handleSetPowerMandate = (granteeId: number, mode: PowerMode): { success: boolean; message: string } => {
+    if (!currentUser) {
+      return { success: false, message: 'Utilisateur non connecté.' };
+    }
+
+    const meetingId = activeMeeting?.id || resolutions[0]?.meetingId;
+    if (!meetingId) {
+      return { success: false, message: 'Aucune assemblée active trouvée pour enregistrer le pouvoir.' };
+    }
+
+    if (granteeId === currentUser.id) {
+      return { success: false, message: 'Vous ne pouvez pas vous désigner vous-même comme mandataire.' };
+    }
+
+    upsertPowerMandate(meetingId, currentUser.id, granteeId, mode);
+    refreshMeetingData(meetingId);
+    return { success: true, message: 'Pouvoir enregistré avec succès.' };
+  };
+
+  const handleClearPower = (): { success: boolean; message: string } => {
+    if (!currentUser) {
+      return { success: false, message: 'Utilisateur non connecté.' };
+    }
+
+    const meetingId = activeMeeting?.id || resolutions[0]?.meetingId;
+    if (!meetingId) {
+      return { success: false, message: 'Aucune assemblée active trouvée pour retirer le pouvoir.' };
+    }
+
+    clearPowerMandate(meetingId, currentUser.id);
+    refreshMeetingData(meetingId);
+    return { success: true, message: 'Pouvoir retiré.' };
   };
 
   if (!dbReady) {
@@ -496,6 +571,7 @@ const App: React.FC = () => {
           activeMeeting={activeMeeting}
           participants={participants}
           resolutions={resolutions}
+          powerMandates={powerMandates}
           onSelectCondo={handleSelectCondo}
           onCreateCondo={handleCreateCondo}
           onSelectMeeting={handleSelectMeeting}
@@ -530,7 +606,12 @@ const App: React.FC = () => {
               resolutions={resolutions}
               currentUser={currentUser}
               participants={participants}
+              powerMandates={powerMandates}
               onVote={handleVote}
+              onInstructionVote={handleInstructionVote}
+              onVoteByProxy={handleVoteByProxy}
+              onSetPowerMandate={handleSetPowerMandate}
+              onClearPowerMandate={handleClearPower}
             />
           </div>
         )

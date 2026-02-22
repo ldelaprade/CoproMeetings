@@ -49,6 +49,17 @@ export interface Vote {
   voterId: number;
   option: VoteOption;
   timestamp: number;
+  voteKind?: 'REAL' | 'INSTRUCTION';
+}
+
+export type PowerMode = 'PRE_FILLED' | 'DELEGATED';
+
+export interface PowerMandate {
+  meetingId: number;
+  grantorId: number;
+  granteeId: number;
+  mode: PowerMode;
+  createdAt: number;
 }
 
 export interface Resolution {
@@ -58,4 +69,5 @@ export interface Resolution {
   description: string;
   status: ResolutionStatus;
   votes: Vote[];
+  instructionVotes?: Vote[];
 }
