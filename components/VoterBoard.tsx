@@ -39,7 +39,9 @@ const VoterBoard: React.FC<VoterBoardProps> = ({
   const activeParticipants = participants.filter(p => p.isActive);
   const availableProxies = activeParticipants.filter(p => p.id !== currentUser.id.toString());
   const myMandate = powerMandates.find(m => m.grantorId === currentUser.id) || null;
-  const delegatedToMe = powerMandates.filter(m => m.granteeId === currentUser.id && m.mode === 'DELEGATED');
+  const mandatesForMe = powerMandates.filter(m => m.granteeId === currentUser.id);
+  const delegatedToMe = mandatesForMe.filter(m => m.mode === 'DELEGATED');
+  const prefilledToMe = mandatesForMe.filter(m => m.mode === 'PRE_FILLED');
   const isDirectVoteBlocked = myMandate?.mode === 'DELEGATED';
 
   useEffect(() => {
@@ -55,6 +57,7 @@ const VoterBoard: React.FC<VoterBoardProps> = ({
   const hasVoted = (res: Resolution) => res.votes.some(v => v.voterId === currentUser.id);
   const getMyVote = (res: Resolution) => res.votes.find(v => v.voterId === currentUser.id)?.option;
   const getVoteForGrantor = (res: Resolution, grantorId: number) => res.votes.find(v => v.voterId === grantorId)?.option;
+  const getInstructionForGrantor = (res: Resolution, grantorId: number) => res.instructionVotes?.find(v => v.voterId === grantorId)?.option;
   const getMyInstructionVote = (res: Resolution) => res.instructionVotes?.find(v => v.voterId === currentUser.id)?.option;
   const getParticipantName = (id: number) => participants.find(p => p.id === id.toString())?.name || 'Copropriétaire inconnu';
 
@@ -179,10 +182,18 @@ const VoterBoard: React.FC<VoterBoardProps> = ({
             )}
           </section>
 
-          {delegatedToMe.length > 0 && (
+          {mandatesForMe.length > 0 && (
             <section className="bg-indigo-50 border border-indigo-100 rounded-2xl p-6">
-              <h3 className="text-lg font-bold text-indigo-900 mb-1">Pouvoirs reçus</h3>
-              <p className="text-sm text-indigo-700">Vous votez pour : {delegatedToMe.map(m => getParticipantName(m.grantorId)).join(', ')}</p>
+              <div className="flex items-center justify-between gap-3 mb-1">
+                <h3 className="text-lg font-bold text-indigo-900">Pouvoirs reçus</h3>
+                <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                  {mandatesForMe.length} mandat{mandatesForMe.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              <p className="text-sm text-indigo-700">Vous votez à la place de : {mandatesForMe.map(m => getParticipantName(m.grantorId)).join(', ')}</p>
+              {prefilledToMe.length > 0 && (
+                <p className="text-xs text-indigo-600 mt-2">Avec consignes préremplies : {prefilledToMe.map(m => getParticipantName(m.grantorId)).join(', ')}</p>
+              )}
             </section>
           )}
 
@@ -325,13 +336,18 @@ const VoterBoard: React.FC<VoterBoardProps> = ({
 
                         {delegatedToMe.length > 0 && (
                           <div className="mt-5 pt-4 border-t border-slate-100 space-y-3">
-                            <h5 className="text-xs font-bold uppercase text-slate-500">Votes en tant que mandataire</h5>
+                            <div className="flex items-center justify-between gap-3">
+                              <h5 className="text-xs font-bold uppercase text-slate-500">Votes en tant que mandataire</h5>
+                              <span className="text-[10px] font-bold uppercase px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                {delegatedToMe.filter(mandate => !getVoteForGrantor(res, mandate.grantorId)).length} / {delegatedToMe.length} à faire
+                              </span>
+                            </div>
                             {delegatedToMe.map(mandate => {
                               const delegatedChoice = getVoteForGrantor(res, mandate.grantorId);
                               return (
                                 <div key={mandate.grantorId} className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
                                   <div className="flex items-center justify-between mb-2">
-                                    <span className="text-sm font-semibold text-indigo-900">Pour {getParticipantName(mandate.grantorId)}</span>
+                                    <span className="text-sm font-semibold text-indigo-900">Vous votez à la place de : {getParticipantName(mandate.grantorId)}</span>
                                     <span className="text-[10px] font-bold uppercase text-indigo-700 bg-indigo-100 px-2 py-1 rounded-full">
                                       {delegatedChoice ? `Choix: ${delegatedChoice}` : 'Pas encore voté'}
                                     </span>
@@ -340,6 +356,29 @@ const VoterBoard: React.FC<VoterBoardProps> = ({
                                     <button onClick={() => onVoteByProxy(res.id, mandate.grantorId, VoteOption.YES)} className="py-2 text-xs font-bold rounded-lg border border-green-200 bg-green-50 text-green-700 hover:bg-green-100">POUR</button>
                                     <button onClick={() => onVoteByProxy(res.id, mandate.grantorId, VoteOption.NO)} className="py-2 text-xs font-bold rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100">CONTRE</button>
                                     <button onClick={() => onVoteByProxy(res.id, mandate.grantorId, VoteOption.ABSTAIN)} className="py-2 text-xs font-bold rounded-lg border border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200">ABSTENTION</button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {prefilledToMe.length > 0 && (
+                          <div className="mt-5 pt-4 border-t border-slate-100 space-y-3">
+                            <h5 className="text-xs font-bold uppercase text-slate-500">Votes en tant que mandataire (consignes préremplies)</h5>
+                            {prefilledToMe.map(mandate => {
+                              const voteFromInstruction = getInstructionForGrantor(res, mandate.grantorId);
+                              const voteApplied = getVoteForGrantor(res, mandate.grantorId);
+                              const lockedChoice = voteApplied || voteFromInstruction;
+                              return (
+                                <div key={`prefilled-${mandate.grantorId}`} className="rounded-xl border border-amber-100 bg-amber-50/60 p-3">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-sm font-semibold text-amber-900">
+                                      Vous votez à la place de : {getParticipantName(mandate.grantorId)} en suivant la consigne de vote : {lockedChoice || 'Aucune consigne'}
+                                    </span>
+                                    <span className="text-[10px] font-bold uppercase text-amber-800 bg-amber-100 px-2 py-1 rounded-full border border-amber-200">
+                                      {lockedChoice ? `Choix verrouillé: ${lockedChoice}` : 'Aucune consigne'}
+                                    </span>
                                   </div>
                                 </div>
                               );

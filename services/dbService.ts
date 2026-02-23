@@ -212,6 +212,58 @@ const setupSchema = () => {
   `);
 
   try {
+    const tableInfo = db.exec("PRAGMA table_info(powers)");
+    const columns = (tableInfo[0]?.values || []) as any[];
+
+    const pkColumns = columns
+      .filter((row: any[]) => Number(row[5]) > 0)
+      .sort((a: any[], b: any[]) => Number(a[5]) - Number(b[5]))
+      .map((row: any[]) => String(row[1]));
+
+    const hasExpectedPrimaryKey =
+      pkColumns.length === 2 &&
+      pkColumns[0] === 'meeting_id' &&
+      pkColumns[1] === 'grantor_id';
+
+    if (!hasExpectedPrimaryKey) {
+      db.run('BEGIN TRANSACTION');
+      db.run('ALTER TABLE powers RENAME TO powers_old');
+      db.run(`
+        CREATE TABLE powers (
+          meeting_id INTEGER,
+          grantor_id INTEGER,
+          grantee_id INTEGER,
+          mode TEXT,
+          created_at INTEGER,
+          PRIMARY KEY(meeting_id, grantor_id),
+          FOREIGN KEY(meeting_id) REFERENCES general_meetings(id),
+          FOREIGN KEY(grantor_id) REFERENCES logins(id),
+          FOREIGN KEY(grantee_id) REFERENCES logins(id)
+        )
+      `);
+      db.run(`
+        INSERT OR REPLACE INTO powers (meeting_id, grantor_id, grantee_id, mode, created_at)
+        SELECT
+          meeting_id,
+          grantor_id,
+          grantee_id,
+          COALESCE(mode, 'DELEGATED'),
+          COALESCE(created_at, CAST(strftime('%s','now') AS INTEGER) * 1000)
+        FROM powers_old
+        WHERE meeting_id IS NOT NULL AND grantor_id IS NOT NULL AND grantee_id IS NOT NULL
+      `);
+      db.run('DROP TABLE powers_old');
+      db.run('COMMIT');
+    }
+  } catch (err) {
+    try {
+      db.run('ROLLBACK');
+    } catch (_rollbackErr) {
+      // no-op
+    }
+  }
+
+  try {
     db.run("ALTER TABLE votes ADD COLUMN vote_kind TEXT DEFAULT 'REAL'");
   } catch (err) {
     // Colonne déjà existante sur bases migrées
