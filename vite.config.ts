@@ -10,9 +10,5 @@ export default defineConfig({
     watch: {
       usePolling: true
     }
-  },
-  optimizeDeps: {
-    // On n'inclut plus sql.js car il est chargé via un script tag classique
-    exclude: ['sql.js']
   }
 });

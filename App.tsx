@@ -29,7 +29,7 @@ const App: React.FC = () => {
   const [dbReady, setDbReady] = useState(false);
   const [dbMode, setDbMode] = useState<'local' | 'browser' | 'server' | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [serverUrl, setServerUrl] = useState('');
+  const [serverUrl, setServerUrl] = useState('/api/db');
   
   const [role, setRole] = useState<RoleType | null>(null);
   const [currentUser, setCurrentUser] = useState<UserLogin | null>(null);
@@ -42,6 +42,8 @@ const App: React.FC = () => {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [resolutions, setResolutions] = useState<Resolution[]>([]);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
+  const [initError, setInitError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(false);
 
   const loadInitialData = useCallback(() => {
     if (role === 'MANAGER') {
@@ -167,9 +169,18 @@ const App: React.FC = () => {
   }, [selectedCondo, activeMeeting, role, refreshCondoData, refreshMeetingData, loadInitialData]);
 
   const startWithBrowserStorage = async () => {
-    await initDatabase();
-    setDbMode('browser');
-    setDbReady(true);
+    setIsInitializing(true);
+    setInitError(null);
+    try {
+      await initDatabase();
+      setDbMode('browser');
+      setDbReady(true);
+    } catch (e: any) {
+      setInitError(e.message || "Erreur lors de l'initialisation de la base de données.");
+      console.error(e);
+    } finally {
+      setIsInitializing(false);
+    }
   };
 
   const startWithLocalFile = async () => {
@@ -194,9 +205,18 @@ const App: React.FC = () => {
 
   const handleReset = async () => {
     if (confirm("Voulez-vous vraiment restaurer les données de démo ? Cela effacera vos modifications locales.")) {
-      await resetDatabase();
-      setDbMode('browser');
-      setDbReady(true);
+      setIsInitializing(true);
+      setInitError(null);
+      try {
+        await resetDatabase();
+        setDbMode('browser');
+        setDbReady(true);
+      } catch (e: any) {
+        setInitError(e.message || "Erreur lors de la réinitialisation de la base de données.");
+        console.error(e);
+      } finally {
+        setIsInitializing(false);
+      }
     }
   };
 
@@ -248,9 +268,22 @@ const App: React.FC = () => {
           <h1 className="text-4xl font-extrabold text-slate-900 mb-4 tracking-tight">Accès au Serveur Co-Vote</h1>
           <p className="text-slate-500 mb-12">Configurez la source de données pour cette session d'assemblée.</p>
           
+          {initError && (
+            <div className="mb-8 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm text-left">
+              <p className="font-bold mb-1">Erreur d'initialisation :</p>
+              <p>{initError}</p>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <button onClick={startWithBrowserStorage} className="p-8 border-2 border-slate-100 rounded-3xl text-left hover:border-indigo-500 hover:bg-indigo-50 transition-all group shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-2 group-hover:text-indigo-700">Mode Web Local</h3>
+            <button 
+              onClick={startWithBrowserStorage} 
+              disabled={isInitializing}
+              className={`p-8 border-2 border-slate-100 rounded-3xl text-left transition-all group shadow-sm ${isInitializing ? 'opacity-50 cursor-not-allowed' : 'hover:border-indigo-500 hover:bg-indigo-50'}`}
+            >
+              <h3 className={`font-bold mb-2 ${isInitializing ? 'text-slate-500' : 'text-slate-800 group-hover:text-indigo-700'}`}>
+                {isInitializing ? 'Chargement...' : 'Mode Web Local'}
+              </h3>
               <p className="text-xs text-slate-400">Stockage dans votre navigateur. Idéal pour les démonstrations.</p>
             </button>
             <button onClick={startWithLocalFile} className="p-8 border-2 border-slate-100 rounded-3xl text-left hover:border-indigo-500 hover:bg-indigo-50 transition-all group shadow-sm">

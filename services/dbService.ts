@@ -1,4 +1,7 @@
 
+import initSqlJs from 'sql.js';
+import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
+
 // Service de base de données SQLite (sql.js)
 let db: any = null;
 let fileHandle: FileSystemFileHandle | null = null;
@@ -16,23 +19,41 @@ const broadcastChange = (type: string, payload?: any) => {
  */
 export const initDatabase = async (buffer?: Uint8Array, url?: string) => {
   try {
-    const initSqlJsFunc = (window as any).initSqlJs;
-    const SQL = await initSqlJsFunc({
-      locateFile: (file: string) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/${file}`
+    const SQL = await initSqlJs({
+      locateFile: () => sqlWasmUrl
     });
 
     if (buffer) {
       db = new SQL.Database(buffer);
     } else if (url) {
       const response = await fetch(url);
-      if (!response.ok) throw new Error("Impossible de charger la base distante.");
-      const arrayBuffer = await response.arrayBuffer();
-      db = new SQL.Database(new Uint8Array(arrayBuffer));
-      remoteUrl = url;
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        db = new SQL.Database(new Uint8Array(arrayBuffer));
+        remoteUrl = url;
+      } else if (response.status === 404) {
+        // Si la base n'existe pas encore sur le serveur, on en crée une nouvelle
+        console.log("Base distante non trouvée, création d'une nouvelle base...");
+        db = new SQL.Database();
+        setupSchema();
+        seedInitialData();
+        remoteUrl = url;
+        await persistDatabase(); // On la pousse immédiatement sur le serveur
+      } else {
+        throw new Error("Impossible de charger la base distante.");
+      }
     } else {
       const savedDb = localStorage.getItem(DB_STORAGE_KEY);
       if (savedDb) {
-        db = new SQL.Database(new Uint8Array(JSON.parse(savedDb)));
+        try {
+          db = new SQL.Database(new Uint8Array(JSON.parse(savedDb)));
+        } catch (e) {
+          console.error("Failed to parse saved DB, creating new one", e);
+          db = new SQL.Database();
+          setupSchema();
+          seedInitialData();
+          persistDatabase();
+        }
       } else {
         db = new SQL.Database();
         setupSchema();
@@ -87,9 +108,18 @@ export const persistDatabase = async () => {
     } catch (err) { console.error("Sync file failed", err); }
   }
 
-  // Si on est en mode "Serveur", on pourrait ici faire un PUT/POST vers une API
+  // Si on est en mode "Serveur", on pousse les changements vers l'API
   if (remoteUrl) {
-    console.log("Simulated Push to Server:", remoteUrl);
+    try {
+      await fetch(remoteUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: data
+      });
+      console.log("Base de données synchronisée avec le serveur.");
+    } catch (err) {
+      console.error("Erreur de synchronisation serveur:", err);
+    }
   }
 };
 
