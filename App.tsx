@@ -25,6 +25,37 @@ import {
   resetDatabase
 } from './services/dbService';
 
+// Simple Error Boundary Component
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: any}> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-10 text-center">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Une erreur est survenue</h1>
+          <p className="text-slate-600 mb-6">{this.state.error?.message || "Erreur inconnue"}</p>
+          <button 
+            onClick={() => window.location.reload()} 
+            className="bg-indigo-600 text-white px-6 py-2 rounded-xl"
+          >
+            Recharger l'application
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const App: React.FC = () => {
   const [dbReady, setDbReady] = useState(false);
   const [dbMode, setDbMode] = useState<'local' | 'browser' | 'server' | null>(null);
@@ -42,8 +73,9 @@ const App: React.FC = () => {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [resolutions, setResolutions] = useState<Resolution[]>([]);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
-  const [initError, setInitError] = useState<string | null>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
 
   const loadInitialData = useCallback(() => {
     if (role === 'MANAGER') {
@@ -53,21 +85,48 @@ const App: React.FC = () => {
   }, [role]);
 
   const refreshCondoData = useCallback((condoId: number) => {
-    const condo = getCondominium(condoId);
-    setSelectedCondo(condo as any);
-    const voters = getVoters(condoId);
-    setParticipants(voters.map((v: any) => ({
-      id: v.id.toString(),
-      name: v.name,
-      email: v.email
-    })));
-    const condoMeetings = getMeetings(condoId);
-    setMeetings(condoMeetings as any);
+    try {
+      console.log('Refreshing condo data for condoId:', condoId);
+      const condo = getCondominium(condoId);
+      if (condo) {
+        console.log('Found condo:', condo.name);
+        setSelectedCondo(condo as any);
+      } else {
+        console.warn('getCondominium returned null for id:', condoId);
+      }
+      
+      const voters = getVoters(condoId);
+      console.log('Voters fetched from DB:', voters.length, JSON.stringify(voters));
+      
+      const mappedParticipants = voters.map((v: any) => {
+        const name = v && v.name && typeof v.name === 'string' ? v.name.trim() : '';
+        const email = v && v.email && typeof v.email === 'string' ? v.email.trim() : '';
+        
+        return {
+          id: v && v.id ? v.id.toString() : Math.random().toString(),
+          name: name !== '' ? name : 'Nom non renseigné',
+          email: email !== '' ? email : 'Email non renseigné'
+        };
+      });
+      
+      console.log('Mapped participants:', mappedParticipants.length);
+      setParticipants(mappedParticipants);
+      
+      const condoMeetings = getMeetings(condoId);
+      console.log('Meetings fetched from DB:', condoMeetings.length, JSON.stringify(condoMeetings));
+      setMeetings(condoMeetings as any);
+    } catch (error) {
+      console.error("Error in refreshCondoData:", error);
+    }
   }, []);
 
   const refreshMeetingData = useCallback((meetingId: number) => {
-    const resFromDb = getAllResolutions(meetingId);
-    setResolutions(resFromDb as any);
+    try {
+      const resFromDb = getAllResolutions(meetingId);
+      setResolutions(resFromDb as any);
+    } catch (error) {
+      console.error("Error in refreshMeetingData:", error);
+    }
   }, []);
 
   // Fix: Implemented missing handler for selecting a condominium
@@ -84,9 +143,14 @@ const App: React.FC = () => {
   };
 
   // Fix: Implemented missing handler for creating a condominium
-  const handleCreateCondo = (name: string, address: string) => {
-    createCondominium(name, address);
-    loadInitialData();
+  const handleCreateCondo = async (name: string, address: string) => {
+    try {
+      await createCondominium(name, address);
+      loadInitialData();
+    } catch (error) {
+      console.error("Error creating condo:", error);
+      alert("Erreur lors de la création de la copropriété.");
+    }
   };
 
   // Fix: Implemented missing handler for selecting a meeting
@@ -100,59 +164,88 @@ const App: React.FC = () => {
   };
 
   // Fix: Implemented missing handler for creating a new meeting
-  const handleCreateNewMeeting = (title: string, date: string) => {
+  const handleCreateNewMeeting = async (title: string, date: string) => {
     if (selectedCondo) {
-      createMeeting(selectedCondo.id, title, date);
-      refreshCondoData(selectedCondo.id);
+      try {
+        await createMeeting(selectedCondo.id, title, date);
+        refreshCondoData(selectedCondo.id);
+      } catch (error) {
+        console.error("Error creating meeting:", error);
+        alert("Erreur lors de la création de l'AG.");
+      }
     }
   };
 
   // Fix: Implemented missing handler for adding a participant
-  const handleAddParticipant = (p: Participant) => {
+  const handleAddParticipant = async (p: Participant) => {
     if (selectedCondo) {
-      createVoter(p.name, p.email, p.password || '1234', selectedCondo.id);
-      refreshCondoData(selectedCondo.id);
+      try {
+        await createVoter(p.name, p.email, p.password || '1234', selectedCondo.id);
+        refreshCondoData(selectedCondo.id);
+      } catch (e: any) {
+        alert("Erreur lors de la création du copropriétaire: " + (e.message || "Email déjà utilisé ?"));
+      }
     }
   };
 
   // Fix: Implemented missing handler for updating a participant
-  const handleUpdateParticipant = (p: Participant) => {
+  const handleUpdateParticipant = async (p: Participant) => {
     if (selectedCondo) {
-      updateVoter(p.id, p.name, p.email);
-      refreshCondoData(selectedCondo.id);
+      try {
+        await updateVoter(p.id, p.name, p.email);
+        refreshCondoData(selectedCondo.id);
+      } catch (error) {
+        console.error("Error updating participant:", error);
+      }
     }
   };
 
   // Fix: Implemented missing handler for adding a resolution
-  const handleAddResolution = (res: Resolution) => {
-    saveResolution(res);
-    if (activeMeeting) {
-      refreshMeetingData(activeMeeting.id);
+  const handleAddResolution = async (res: Resolution) => {
+    try {
+      await saveResolution(res);
+      if (activeMeeting) {
+        refreshMeetingData(activeMeeting.id);
+      }
+    } catch (error) {
+      console.error("Error adding resolution:", error);
     }
   };
 
   // Fix: Implemented missing handler for updating resolution status
-  const handleUpdateStatus = (id: string, status: ResolutionStatus) => {
-    updateResStatus(id, status);
-    if (activeMeeting) {
-      refreshMeetingData(activeMeeting.id);
+  const handleUpdateStatus = async (id: string, status: ResolutionStatus) => {
+    try {
+      await updateResStatus(id, status);
+      if (activeMeeting) {
+        refreshMeetingData(activeMeeting.id);
+      }
+    } catch (error) {
+      console.error("Error updating status:", error);
     }
   };
 
   // Fix: Implemented missing handler for deleting a resolution
-  const handleDeleteResolution = (id: string) => {
-    deleteResolution(id);
-    if (activeMeeting) {
-      refreshMeetingData(activeMeeting.id);
+  const handleDeleteResolution = async (id: string) => {
+    try {
+      await deleteResolution(id);
+      if (activeMeeting) {
+        refreshMeetingData(activeMeeting.id);
+      }
+    } catch (error) {
+      console.error("Error deleting resolution:", error);
     }
   };
 
   // Fix: Implemented missing handler for registering a vote
-  const handleVote = (resId: string, option: VoteOption) => {
+  const handleVote = async (resId: string, option: VoteOption) => {
     if (currentUser) {
-      registerVote(resId, currentUser.id, option);
-      if (activeMeeting) {
-        refreshMeetingData(activeMeeting.id);
+      try {
+        await registerVote(resId, currentUser.id, option);
+        if (activeMeeting) {
+          refreshMeetingData(activeMeeting.id);
+        }
+      } catch (error) {
+        console.error("Error voting:", error);
       }
     }
   };
@@ -204,20 +297,35 @@ const App: React.FC = () => {
   };
 
   const handleReset = async () => {
-    if (confirm("Voulez-vous vraiment restaurer les données de démo ? Cela effacera vos modifications locales.")) {
-      setIsInitializing(true);
-      setInitError(null);
-      try {
-        await resetDatabase();
-        setDbMode('browser');
-        setDbReady(true);
-      } catch (e: any) {
-        setInitError(e.message || "Erreur lors de la réinitialisation de la base de données.");
-        console.error(e);
-      } finally {
-        setIsInitializing(false);
-      }
+    setShowResetConfirm(false);
+    setIsInitializing(true);
+    setInitError(null);
+    try {
+      // Small delay to ensure the user sees the "Resetting" state
+      await new Promise(resolve => setTimeout(resolve, 800));
+      await resetDatabase();
+      setDbMode('browser');
+      setDbReady(true);
+      // Reset application state to avoid stale data from previous DB
+      setRole(null);
+      setCurrentUser(null);
+      setSelectedCondo(null);
+      setActiveMeeting(null);
+      setParticipants([]);
+      setResolutions([]);
+      setMeetings([]);
+      loadInitialData(); // Refresh condominiums list
+      console.log('Database reset and initial data loaded');
+    } catch (e: any) {
+      setInitError(e.message || "Erreur lors de la réinitialisation de la base de données.");
+      console.error(e);
+    } finally {
+      setIsInitializing(false);
     }
+  };
+
+  const triggerReset = () => {
+    setShowResetConfirm(true);
   };
 
   useEffect(() => {
@@ -308,13 +416,18 @@ const App: React.FC = () => {
           </div>
 
           <div className="mt-12 pt-8 border-t border-slate-100">
-            <button 
-              onClick={handleReset}
-              className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-400 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 transition-all uppercase tracking-widest flex items-center justify-center space-x-2 shadow-sm"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-              <span>Restaurer les données de démo (Reset)</span>
-            </button>
+              <button 
+                onClick={triggerReset}
+                disabled={isInitializing}
+                className="w-full py-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-400 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 transition-all uppercase tracking-widest flex items-center justify-center space-x-2 shadow-sm disabled:opacity-50"
+              >
+                {isInitializing ? (
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                )}
+                <span>{isInitializing ? 'Réinitialisation...' : 'Restaurer les données de démo (Reset)'}</span>
+              </button>
           </div>
         </div>
       </Layout>
@@ -322,7 +435,8 @@ const App: React.FC = () => {
   }
 
   return (
-    <Layout user={currentUser?.name} role={role === 'MANAGER' ? 'LEADER' : 'VOTER'} onLogout={logout}>
+    <ErrorBoundary>
+      <Layout user={currentUser?.name} role={role === 'MANAGER' ? 'LEADER' : 'VOTER'} onLogout={logout}>
       <div className="absolute top-20 right-8 flex items-center space-x-2 bg-white/80 backdrop-blur px-3 py-1.5 rounded-full border border-slate-200 shadow-sm z-10">
         <span className={`w-2 h-2 rounded-full ${dbMode === 'server' ? 'bg-green-500 animate-pulse' : 'bg-amber-400'}`}></span>
         <span className="text-[10px] font-bold text-slate-600 uppercase">Mode: {dbMode}</span>
@@ -363,11 +477,16 @@ const App: React.FC = () => {
              <div className="mt-8 pt-4 border-t border-slate-50">
                <p className="text-[9px] text-slate-400 uppercase font-bold tracking-widest mb-2">Maintenance</p>
                <button 
-                 onClick={handleReset}
-                 className="text-[10px] font-bold text-slate-300 hover:text-indigo-500 transition-colors uppercase tracking-widest flex items-center justify-center mx-auto space-x-1"
+                 onClick={triggerReset}
+                 disabled={isInitializing}
+                 className="text-[10px] font-bold text-slate-300 hover:text-indigo-500 transition-colors uppercase tracking-widest flex items-center justify-center mx-auto space-x-1 disabled:opacity-50"
                >
-                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                 <span>Réinitialiser la base de démo</span>
+                 {isInitializing ? (
+                   <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                 ) : (
+                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                 )}
+                 <span>{isInitializing ? 'Réinitialisation...' : 'Réinitialiser la base de démo'}</span>
                </button>
              </div>
           </div>
@@ -389,7 +508,8 @@ const App: React.FC = () => {
           onAddResolution={handleAddResolution}
           onUpdateResolutionStatus={handleUpdateStatus}
           onDeleteResolution={handleDeleteResolution}
-          onReset={handleReset}
+          onReset={triggerReset}
+          isInitializing={isInitializing}
         />
       ) : (
         currentUser && (
@@ -399,7 +519,20 @@ const App: React.FC = () => {
           </div>
         )
       )}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+          <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full animate-scale-up">
+            <h3 className="text-xl font-bold mb-2 text-slate-900">Restaurer la démo ?</h3>
+            <p className="text-slate-600 mb-8">Cela effacera toutes vos modifications locales et rétablira les données initiales.</p>
+            <div className="flex space-x-3">
+              <button onClick={() => setShowResetConfirm(false)} className="flex-1 py-3 font-bold text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">Annuler</button>
+              <button onClick={handleReset} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg hover:bg-red-700 transition-all">Confirmer</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
+    </ErrorBoundary>
   );
 };
 

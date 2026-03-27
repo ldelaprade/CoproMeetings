@@ -22,13 +22,14 @@ interface LeaderBoardProps {
   onUpdateResolutionStatus: (id: string, status: ResolutionStatus) => void;
   onDeleteResolution: (id: string) => void;
   onReset: () => void;
+  isInitializing?: boolean;
 }
 
 const LeaderBoard: React.FC<LeaderBoardProps> = ({ 
   condominiums, selectedCondo, meetings, activeMeeting, participants, resolutions, 
   onSelectCondo, onCreateCondo, onSelectMeeting, onCreateMeeting, 
   onAddParticipant, onUpdateParticipant, onAddResolution, onUpdateResolutionStatus, onDeleteResolution,
-  onReset
+  onReset, isInitializing
 }) => {
   const [activeTab, setActiveTab] = useState<'coproprietaires' | 'meetings' | 'schema'>('coproprietaires');
   const [meetingTab, setMeetingTab] = useState<'resolutions' | 'results'>('resolutions');
@@ -226,6 +227,13 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                     </td>
                   </tr>
                 ))}
+                {participants.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-6 py-12 text-center text-slate-400 font-medium">
+                      Aucun copropriétaire enregistré.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -250,12 +258,29 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
                 </form>
               )}
               <div className="grid gap-4">
-                {meetings.map(m => (
-                  <div key={m.id} className="bg-white p-6 rounded-3xl border border-slate-200 flex justify-between items-center hover:shadow-md transition-all">
-                    <div><h4 className="font-bold text-lg text-slate-800">{m.title}</h4><p className="text-sm text-slate-500">{new Date(m.date).toLocaleDateString()}</p></div>
-                    <button onClick={() => onSelectMeeting(m)} className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold">Ouvrir</button>
+                {meetings.map(m => {
+                  if (!m) return null;
+                  const meetingDate = m.date ? new Date(m.date) : null;
+                  const dateStr = meetingDate && !isNaN(meetingDate.getTime()) 
+                    ? meetingDate.toLocaleDateString() 
+                    : 'Date non définie';
+                    
+                  return (
+                    <div key={m.id || Math.random()} className="bg-white p-6 rounded-3xl border border-slate-200 flex justify-between items-center hover:shadow-md transition-all">
+                      <div>
+                        <h4 className="font-bold text-lg text-slate-800">{m.title || 'Sans titre'}</h4>
+                        <p className="text-sm text-slate-500">{dateStr}</p>
+                      </div>
+                      <button onClick={() => onSelectMeeting(m)} className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold">Ouvrir</button>
+                    </div>
+                  );
+                })}
+                {meetings.length === 0 && !showNewMeetingForm && (
+                  <div className="py-20 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                    <p className="text-slate-400 font-medium">Aucune assemblée générale enregistrée.</p>
+                    <button onClick={() => setShowNewMeetingForm(true)} className="text-indigo-600 font-bold mt-2">Créer la première</button>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           ) : (
@@ -374,10 +399,15 @@ const LeaderBoard: React.FC<LeaderBoardProps> = ({
           <div className="flex justify-end">
             <button 
               onClick={onReset}
-              className="flex items-center space-x-2 px-4 py-2 bg-red-50 text-red-600 border border-red-100 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors"
+              disabled={isInitializing}
+              className="flex items-center space-x-2 px-4 py-2 bg-red-50 text-red-600 border border-red-100 rounded-xl text-xs font-bold hover:bg-red-100 transition-colors disabled:opacity-50"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-              <span>Réinitialiser toutes les données</span>
+              {isInitializing ? (
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+              ) : (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+              )}
+              <span>{isInitializing ? 'Réinitialisation...' : 'Réinitialiser toutes les données'}</span>
             </button>
           </div>
           <SchemaVisualizer />
