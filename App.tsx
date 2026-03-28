@@ -251,14 +251,17 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    const syncChannel = new BroadcastChannel('covote_sync');
-    syncChannel.onmessage = async () => {
-      await initDatabase(); 
+    const handleDataChange = async () => {
       if (selectedCondo) refreshCondoData(selectedCondo.id);
       if (activeMeeting) refreshMeetingData(activeMeeting.id);
       if (role === 'MANAGER') loadInitialData();
     };
-    return () => syncChannel.close();
+
+    window.addEventListener('covote_data_changed', handleDataChange);
+    
+    return () => {
+      window.removeEventListener('covote_data_changed', handleDataChange);
+    };
   }, [selectedCondo, activeMeeting, role, refreshCondoData, refreshMeetingData, loadInitialData]);
 
   const startWithBrowserStorage = async () => {

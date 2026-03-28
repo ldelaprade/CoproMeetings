@@ -6,9 +6,64 @@ import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 let db: any = null;
 let fileHandle: FileSystemFileHandle | null = null;
 let remoteUrl: string | null = null;
+let ws: WebSocket | null = null;
 
+const clientId = Math.random().toString(36).substring(2, 15);
 const DB_STORAGE_KEY = 'covote_pro_sqlite_db_v6'; // Version bump for Base64 storage
 const syncChannel = new BroadcastChannel('covote_sync');
+
+function connectWebSocket(url: string) {
+  if (ws) {
+    ws.onclose = null; // Prevent reconnect loop
+    ws.close();
+  }
+  
+  try {
+    const urlObj = new URL(url, window.location.origin);
+    const wsProtocol = urlObj.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${urlObj.host}`;
+    
+    ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+      console.log("Connecté au serveur WebSocket pour les mises à jour en temps réel.");
+    };
+    
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'DB_UPDATED' && data.clientId !== clientId) {
+          console.log("Mise à jour de la base de données reçue du serveur.");
+          await reloadFromRemote();
+        }
+      } catch (e) {
+        console.error("Erreur WS message:", e);
+      }
+    };
+    
+    ws.onclose = () => {
+      console.log("Déconnecté du serveur WebSocket. Reconnexion dans 5s...");
+      setTimeout(() => connectWebSocket(url), 5000);
+    };
+  } catch (e) {
+    console.error("Erreur de connexion WebSocket:", e);
+  }
+}
+
+async function reloadFromRemote() {
+  if (!remoteUrl) return;
+  try {
+    const response = await fetch(remoteUrl);
+    if (response.ok) {
+      const arrayBuffer = await response.arrayBuffer();
+      const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl });
+      db = new SQL.Database(new Uint8Array(arrayBuffer));
+      broadcastChange('DATA_CHANGED');
+    }
+  } catch (err) {
+    console.error("Erreur lors du rechargement distant:", err);
+  }
+}
 
 // Helper to convert Uint8Array to Base64 efficiently
 function uint8ArrayToBase64(bytes: Uint8Array): string {
@@ -33,6 +88,15 @@ function base64ToUint8Array(base64: string): Uint8Array {
 
 const broadcastChange = (type: string, payload?: any) => {
   syncChannel.postMessage({ type, payload, timestamp: Date.now() });
+  window.dispatchEvent(new CustomEvent('covote_data_changed', { detail: { type, payload } }));
+};
+
+syncChannel.onmessage = async (event) => {
+  if (event.data.type === 'DATA_CHANGED' && !remoteUrl) {
+    // Reload from localStorage if not using remoteUrl
+    await initDatabase();
+    window.dispatchEvent(new CustomEvent('covote_data_changed', { detail: event.data }));
+  }
 };
 
 /**
@@ -48,21 +112,24 @@ export const initDatabase = async (buffer?: Uint8Array, url?: string) => {
       db = new SQL.Database(buffer);
       setupSchema();
       seedInitialData(); // Ensure demo data is correct/repaired
-    } else if (url) {
-      const response = await fetch(url);
+    } else if (url || remoteUrl) {
+      const targetUrl = url || remoteUrl;
+      const response = await fetch(targetUrl!);
       if (response.ok) {
         const arrayBuffer = await response.arrayBuffer();
         db = new SQL.Database(new Uint8Array(arrayBuffer));
         setupSchema();
         seedInitialData(); // Ensure demo data is correct/repaired
-        remoteUrl = url;
+        remoteUrl = targetUrl!;
+        if (url) connectWebSocket(url); // Only connect if it's a new URL
       } else if (response.status === 404) {
         // Si la base n'existe pas encore sur le serveur, on en crée une nouvelle
         console.log("Base distante non trouvée, création d'une nouvelle base...");
         db = new SQL.Database();
         setupSchema();
         seedInitialData();
-        remoteUrl = url;
+        remoteUrl = targetUrl!;
+        if (url) connectWebSocket(url);
         await persistDatabase(); // On la pousse immédiatement sur le serveur
       } else {
         throw new Error("Impossible de charger la base distante.");
@@ -152,7 +219,10 @@ export const persistDatabase = async () => {
       try {
         await fetch(remoteUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/octet-stream' },
+          headers: { 
+            'Content-Type': 'application/octet-stream',
+            'X-Client-Id': clientId
+          },
           body: data
         });
         console.log("Base de données synchronisée avec le serveur.");
