@@ -26,19 +26,24 @@ function connectWebSocket(url: string) {
     ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
-      console.log("Connecté au serveur WebSocket pour les mises à jour en temps réel.");
+      console.log(`Connecté au serveur WebSocket: ${wsUrl}`);
     };
     
     ws.onmessage = async (event) => {
+      console.log("Message WebSocket reçu:", event.data);
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'DB_UPDATED' && data.clientId !== clientId) {
-          console.log("Mise à jour de la base de données reçue du serveur.");
+          console.log("Mise à jour de la base de données reçue du serveur (clientId distant:", data.clientId, ")");
           await reloadFromRemote();
         }
       } catch (e) {
         console.error("Erreur WS message:", e);
       }
+    };
+    
+    ws.onerror = (e) => {
+      console.error("Erreur WebSocket:", e);
     };
     
     ws.onclose = () => {
@@ -53,7 +58,7 @@ function connectWebSocket(url: string) {
 async function reloadFromRemote() {
   if (!remoteUrl) return;
   try {
-    const response = await fetch(remoteUrl);
+    const response = await fetch(`${remoteUrl}?t=${Date.now()}`);
     if (response.ok) {
       const arrayBuffer = await response.arrayBuffer();
       const SQL = await initSqlJs({ locateFile: () => sqlWasmUrl });
@@ -114,7 +119,7 @@ export const initDatabase = async (buffer?: Uint8Array, url?: string) => {
       seedInitialData(); // Ensure demo data is correct/repaired
     } else if (url || remoteUrl) {
       const targetUrl = url || remoteUrl;
-      const response = await fetch(targetUrl!);
+      const response = await fetch(`${targetUrl!}?t=${Date.now()}`);
       if (response.ok) {
         const arrayBuffer = await response.arrayBuffer();
         db = new SQL.Database(new Uint8Array(arrayBuffer));
@@ -230,6 +235,9 @@ export const persistDatabase = async () => {
         console.error("Erreur de synchronisation serveur:", err);
       }
     }
+    
+    // Important: Notify other tabs and trigger UI refresh
+    broadcastChange('DATA_CHANGED');
   } catch (err) {
     console.error("Critical error in persistDatabase:", err);
   }

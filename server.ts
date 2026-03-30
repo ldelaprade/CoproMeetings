@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import fs from "fs";
 import path from "path";
 import bodyParser from "body-parser";
@@ -27,6 +26,14 @@ async function startServer() {
     }
   });
 
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Serveur Co-Vote démarré sur http://localhost:${PORT}`);
+    console.log(`Endpoint DB: http://localhost:${PORT}/api/db`);
+  });
+
+  // Attach WebSocket server to the same HTTP server
+  const wss = new WebSocketServer({ server });
+
   // API: Sauvegarder le fichier de base de données
   app.post("/api/db", (req, res) => {
     try {
@@ -34,6 +41,7 @@ async function startServer() {
       console.log("Base de données mise à jour sur le serveur.");
       
       const clientId = req.headers['x-client-id'];
+      console.log(`Diffusion de la mise à jour (clientId: ${clientId}) à ${wss.clients.size} clients.`);
       
       // Notify all connected WebSocket clients that the DB has been updated
       wss.clients.forEach((client) => {
@@ -51,11 +59,12 @@ async function startServer() {
 
   // API Health
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", dbExists: fs.existsSync(DB_FILE_PATH) });
+    res.json({ status: "ok", dbExists: fs.existsSync(DB_FILE_PATH), clientsCount: wss.clients.size });
   });
 
   // Vite middleware pour le développement
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -68,14 +77,6 @@ async function startServer() {
       res.sendFile(path.join(__dirname, "dist", "index.html"));
     });
   }
-
-  const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Serveur Co-Vote démarré sur http://localhost:${PORT}`);
-    console.log(`Endpoint DB: http://localhost:${PORT}/api/db`);
-  });
-
-  // Attach WebSocket server to the same HTTP server
-  const wss = new WebSocketServer({ server });
 
   wss.on("connection", (ws) => {
     console.log("Nouveau client WebSocket connecté.");
