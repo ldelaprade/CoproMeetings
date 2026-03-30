@@ -19,10 +19,11 @@ function connectWebSocket(url: string) {
   }
   
   try {
-    const urlObj = new URL(url, window.location.origin);
-    const wsProtocol = urlObj.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${urlObj.host}`;
+    // Construct WebSocket URL using the current host and a dedicated /ws path
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
     
+    console.log(`Tentative de connexion WebSocket: ${wsUrl}`);
     ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {

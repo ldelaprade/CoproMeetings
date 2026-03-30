@@ -31,8 +31,8 @@ async function startServer() {
     console.log(`Endpoint DB: http://localhost:${PORT}/api/db`);
   });
 
-  // Attach WebSocket server to the same HTTP server
-  const wss = new WebSocketServer({ server });
+  // Attach WebSocket server to the same HTTP server on a dedicated path
+  const wss = new WebSocketServer({ server, path: "/ws" });
 
   // API: Sauvegarder le fichier de base de données
   app.post("/api/db", (req, res) => {
